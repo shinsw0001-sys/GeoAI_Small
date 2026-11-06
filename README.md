@@ -14,10 +14,10 @@
 | 프로젝트 상태 저장소 | 작업 상태·메시지 기록. 상태 전이는 비교 후 교환(compare-and-set)으로만 한다. | PostgreSQL + PostGIS |
 | 메시지 버스 | 작업·이벤트 전달. 주제 `geoai.<계층>.<에이전트>.<수행 의도>`. | NATS JetStream |
 | 데이터·모델 저장소 | 원본·가공·모델·결과. S3 API로만 접근한다. | SeaweedFS (S3 호환), `geoai_common.objectstore` |
-| 실행 작업 유형 | 작업을 실현하는 연산 단위. 온톨로지 클래스 하나 = 처리 도구 진입점 하나(등록제). | `ontology/core/geoai-execution.ttl` |
+| 실행 작업 유형 | 작업을 실현하는 연산 단위. 온톨로지 클래스 하나 = 처리 도구 진입점 하나(등록제). 범용은 실행 계층 확장에, 분야 전용(`gai:forDomain`)은 분야 온톨로지에 선언한다. | `ontology/core/geoai-execution.ttl`, `ontology/domains/` |
 | 전문 에이전트 | 생성·가공, 전처리, 모델·학습, 분석·평가. 접수 판단·실행 작업 제출·산출물 검증만 한다. | `agents/specialist-agents/` |
 | 작업 실행기 | 실행 작업 명세를 받아 처리 도구를 돌린다. 개발은 하위 프로세스, 운영은 쿠버네티스 Job. | `geoai_common.jobs` |
-| 처리 도구 | 실제 연산(정합, 타일 분할, 라벨 래스터화, 학습, 성능 검증). 그래픽 처리 장치 사용. | `tools/geoai-tools/` |
+| 처리 도구 | 실제 연산(정합, 다시기 영상·라이다 정합, 타일 분할, 라벨 래스터화·변화 라벨 도출, 학습, 성능 검증). 그래픽 처리 장치 사용. | `tools/geoai-tools/` |
 | 운영 콘솔 | 작업 요청·진행·결과 화면. 위험 항목만 빨간색으로 알린다. | `console/ops-console/` |
 
 ### 1.1 온톨로지 핵심 구조
@@ -53,6 +53,8 @@ prov:Entity, dcat:Dataset ⊒ gai:DataAsset ⊒ {RawData ⊒ {Aerial, Satellite,
 
 Studio Agent는 요청 작업의 필요 입력을 하나씩 확인하고, 요청 입력으로 채워지지 않는 유형은 그 유형을 산출하는 작업을 앞에 붙인다(역방향 연쇄). 예를 들어 항공 사진으로 모델 학습을 요청하면 `생성·가공 → 전처리 → 라벨링 → 학습` 4단계가 만들어진다. 새 작업 유형은 코드 수정 없이 분야 온톨로지에 세 속성만 선언하면 계획에 들어간다.
 
+작업 계획(무엇을)은 분야와 무관하고, 실행 작업 선택(어떻게)은 분야에 따라 갈린다. 전문 에이전트는 작업 유형을 실현하는 실행 작업 중 요청 분야 전용(`gai:forDomain`)을 범용보다 먼저 고른다. 실행 작업 유형에는 입력 조건(`gai:acceptsInputType`, `gai:minAcquisitionDates`)과 자원(`gai:requiresAccelerator`, `gai:memoryLimit`)을 함께 선언하고, 전문 에이전트는 이 선언으로 접수 여부를 판단한다.
+
 ### 1.3 메시지 규약
 
 | 수행 의도 | 의미 | 본문 |
@@ -83,16 +85,45 @@ Studio Agent는 요청 작업의 필요 입력을 하나씩 확인하고, 요청
 - 버킷: `raw`(원본), `processed`(가공·분석 준비), `labels`, `models`, `results`, `jobs`.
 - 개발·시험 자료: 실행 중 인터넷 의존 금지 규칙에 따라 공개 데이터셋을 내려받지 않고, 같은 형식의 합성 항공 영상(EPSG:5186, 0.5 m)과 건물 윤곽 GeoJSON을 만든다(`geoai-tools sample`). 실제 자료는 콘솔의 원본 자료 화면에서 올린다.
 
-### 1.5 운영 콘솔
+### 1.5 변화탐지(건물·토지) 전 과정 (1년차 2순위 분야)
+
+두 시점 이상의 영상과 라이다 점군을 받아 건물 신축·멸실·변경과 토지 변화를 찾는다. 계획은 건물 추출과 같은 5단계이고, 실행 작업은 분야 온톨로지(`ontology/domains/change-detection.ttl`)가 정한다. 입력을 화소 단위로 쌓아 한 번에 분할하는 조기 융합(early fusion) 방식 [16]이며, 건물 추출 모델의 가중치를 초기값으로 옮겨 쓴다.
+
+| 단계 | 작업 (담당 에이전트) | 실행 작업 유형 → 진입점 | 산출 | 주요 처리·검사 |
+|---|---|---|---|---|
+| 1 수집·가공 | 공간정보 생성·가공 (생성·가공) | `job:MultiTemporalIngestJob` → `multitemporal-ingest` (분야 전용) | 시점별 정사영상, 시점별 정규화 수치 표면 모델 | 취득 일자 2개 이상 확인, 모든 시점이 겹치는 공통 격자로 재투영, 라이다(LAS [17], laspy [18]) 격자화: 수치 표면 모델 − 지면 모델 = 지물 높이, 시점 간 겹침 비율 |
+| 2 전처리 | 전처리 (전처리) | `job:TilingJob` → `tiling` (범용) | 분석 준비 데이터(8밴드) | 이후 시점 영상의 상대 방사 정규화, 밴드 쌓기(시점별 RGB + 시점별 지물 높이), 타일 분할·공간 블록 분할 |
+| 3 라벨링 | 라벨링 (모델·학습) | `job:ChangeLabelDeriveJob` → `change-labels` (분야 전용) | 라벨 세트, 변화 참조 다각형 | 두 시점 건물 윤곽 1:1 대응(IoU), 토지피복 다각형 대조, 개념 정의에 따른 도출 |
+| 4 학습 | 모델 학습 (모델·학습) | `job:SegmentationTrainJob` → `segmentation-train` (범용) | 모델 | 입력 밴드 수 자동, 건물 추출 모델 전이(첫 층은 시점별 RGB에 나눠 넣고 지물 높이 채널은 0에서 시작), 드문 변화 유형 가중치 |
+| 5 평가 | 성능 검증 (분석·평가) | `job:SegmentationEvaluateJob` → `segmentation-evaluate` (범용) | 성능 검증 보고, 예측 변화 다각형 | 변화 여부 F1·IoU, 유형 평균 IoU, 유형별 IoU·면적·객체 수, 두 시점 비교 미리보기 |
+
+변화 유형 도출 규칙 (라벨 개념의 `skos:definition`과 같다)
+
+| 변화 유형 (화소값) | 규칙 | 라벨 영역 |
+|---|---|---|
+| 건물 멸실 (1) | 이전 시점 건물 중 이후 시점과 대응되는 것이 없음 | 이전 윤곽 |
+| 토지 변화 (2) | 두 시점 토지피복 다각형이 겹치고 분류가 다름 | 겹친 부분 − 건물 변화 영역 |
+| 건물 변경 (3) | 대응 쌍의 IoU < 0.8 (`modified_iou`) | 두 윤곽의 대칭 차 |
+| 건물 신축 (4) | 이후 시점 건물 중 이전 시점과 대응되는 것이 없음 | 이후 윤곽 |
+
+대응은 IoU 0.1(`match_iou`) 이상인 쌍을 큰 값부터 1:1로 묶는다. 4 m²(`min_change_m2`) 미만 조각은 버린다. 변화 벡터를 이미 갖고 있으면 `label_source`로 주면 그대로 래스터화한다.
+
+- 시점 표현: 데이터 자산 참조에 취득 일자(`acquired_at`)를 더했다. 형상 검증 그래프에서는 기존 핵심 어휘 `gai:temporalExtent`에 OWL-Time 순간(`time:Instant`, `time:inXSDDate`) [19]으로 붙는다. 핵심 온톨로지는 고치지 않았다.
+- 완료 기준(분야 권장 시작값): 변화 여부 F1(`foreground_F1`) ≥ 0.7, 변화 유형 평균 IoU ≥ 0.5.
+- 접수 판단: 생성·가공 에이전트는 취득 일자가 다른 입력이 2시점 미만이면 거절한다(`insufficient_acquisitions`). 모델·학습 에이전트는 라벨링 전에 `label_sources`(또는 `label_source`) 안의 모든 저장소 주소가 실제로 있는지 확인한다.
+- 자원: 다시기 정합은 점군을 메모리에 올리므로 실행 작업 메모리 16Gi(`gai:memoryLimit`)를 선언한다. `geoai-jobs` 네임스페이스의 LimitRange가 컨테이너 상한을 16Gi로 묶는다.
+- 개발·시험 자료: `geoai-tools sample --kind change`가 두 시점 합성 영상(촬영 조건 차이 포함), 라이다(3점/m², 지면·식생·건물 분류), 시점별 건물 윤곽·토지피복(환경부 대분류 이름)을 만든다.
+
+### 1.6 운영 콘솔
 
 | 화면 | 내용 |
 |---|---|
 | 현황 | 상태별 건수, 위험 알림, 최근 작업과 지표 |
-| 새 작업 | 분야·요청 작업 선택(계획 단계 미리보기), 입력 영상, 참조 벡터, 완료 기준(분야 권장값 자동 입력), 학습 설정 |
-| 작업 상세 | 단계별 진행 막대와 실행 중 메모(세대·손실·검증 IoU), 완료 기준 판정, 성능 지표, 시험 타일 미리보기, 학습 이력 그래프, 단계별 산출물, 메시지 기록 |
-| 원본 자료 | raw 버킷 영상(좌표 참조 체계·해상도)과 참조 벡터 목록, 올리기 |
+| 새 작업 | 분야·요청 작업 선택(계획 단계 미리보기), 입력 영상, 참조 벡터, 완료 기준(분야 권장값 자동 입력), 학습 설정. 다시기 분야(분야 온톨로지가 2시점 이상 요구)를 고르면 시점별 입력 묶음(취득 일자, 영상, 라이다, 건물 윤곽, 토지피복)과 초기 가중치(학습된 건물 추출 모델) 선택으로 바뀐다. |
+| 작업 상세 | 단계별 진행 막대와 실행 중 메모(세대·손실·검증 IoU), 완료 기준 판정, 성능 지표, 시험 타일 미리보기, 학습 이력 그래프, 단계별 산출물, 메시지 기록. 변화탐지는 비교 시점, 변화 지도 미리보기(왼쪽 이전 시점, 오른쪽 이후 시점 + 변화), 변화 유형별 IoU·F1·면적·객체 수, 초기 가중치 전이 내역을 더 보인다. |
+| 원본 자료 | raw 버킷 영상(좌표 참조 체계·해상도), 라이다 점군, 참조 벡터 목록, 올리기 |
 
-색은 채도 낮은 청록·회색 계열이며 밝은·어두운 화면을 모두 지원한다. 빨간색은 실패, 거절, 완료 기준 미달, 하위 작업 실패에만 쓴다. 이런 작업이 있으면 모든 화면 상단에 빨간 알림 띠가 뜬다. 외부 글꼴·스크립트를 쓰지 않는다.
+색은 채도 낮은 청록·회색 계열이며 밝은·어두운 화면을 모두 지원한다. 변화 유형 색도 호박·하늘·보라·초록의 차분한 색만 쓴다. 빨간색은 실패, 거절, 완료 기준 미달, 하위 작업 실패에만 쓴다. 이런 작업이 있으면 모든 화면 상단에 빨간 알림 띠가 뜬다. 외부 글꼴·스크립트를 쓰지 않는다.
 
 ## 2. 저장소 구조
 
@@ -103,9 +134,9 @@ libs/geoai-common/   공통 라이브러리: 메시지, 온톨로지 레지스�
                      작업 실행기, 완료 기준 판정, 언어 모델 추상화
 agents/studio-agent/ Studio Agent (HTTP API + 버스 구독), Dockerfile, 해시 고정 잠금 파일
 agents/specialist-agents/  전문 에이전트 4종 (같은 이미지, GEOAI_AGENT_ID 로 역할 지정)
-tools/geoai-tools/   처리 도구: 실행 작업 진입점 5종, 합성 표본 생성
+tools/geoai-tools/   처리 도구: 실행 작업 진입점 7종(범용 5, 변화탐지 전용 2), 라이다 격자화, 합성 표본 생성
 console/ops-console/ 운영 콘솔 (화면 + 화면용 API), 개발용 일체형 실행(geoai-dev)
-tests/e2e/           건물 추출 종단 시험
+tests/e2e/           건물 추출·변화탐지 종단 시험
 deploy/k8s/          Kustomize base + overlays(dev, onprem)
 deploy/compose/      통합 시험용 의존 서비스
 ```
@@ -117,7 +148,7 @@ python -m venv .venv && . .venv/bin/activate
 make install
 make dev                # 일체형 실행: 운영 콘솔 http://127.0.0.1:8000 (합성 표본 자동 생성)
 make test               # 단위 시험
-make test-e2e           # 건물 추출 종단 시험 (처리 도구까지 실제 실행)
+make test-e2e           # 건물 추출·변화탐지 종단 시험 (처리 도구까지 실제 실행)
 make test-integration   # PostgreSQL·NATS 컨테이너를 띄워 통합 시험
 make image              # 이미지 4종 (Studio Agent, 전문 에이전트, 운영 콘솔, 처리 도구)
 ```
@@ -154,7 +185,7 @@ Studio Agent HTTP API
 |---|---|---|
 | `geoai` | Studio Agent, 전문 에이전트 4종, 운영 콘솔, NATS JetStream | Deployment, StatefulSet |
 | `geoai-data` | PostgreSQL+PostGIS, SeaweedFS(S3) | StatefulSet + 영구 볼륨 |
-| `geoai-jobs` | 실행 작업(처리 도구 파드). 전문 에이전트가 Job 을 만든다. | Job, Role·RoleBinding(Job 생성 권한만) |
+| `geoai-jobs` | 실행 작업(처리 도구 파드). 전문 에이전트가 Job 을 만든다. | Job, Role·RoleBinding(Job 생성 권한만), LimitRange(컨테이너 메모리 상한 16Gi, 기본 8Gi) |
 | `observability` | 추적·지표·로그 | 이름만 생성 (다음 단계) |
 
 ```bash
@@ -186,7 +217,7 @@ kubectl -n geoai-jobs create secret generic geoai-object-store-client \
 | 실행 중 인터넷 의존 금지 | 의존 패키지는 빌드 단계에서 해시 고정 잠금 파일로 설치. onprem 오버레이는 모든 이미지를 사설 레지스트리(`registry.geoai.internal`, 실제 주소로 교체)에서 받는다. 사내 패키지 저장소는 `PIP_INDEX_URL` 빌드 인자로 지정. |
 | 언어 모델 호출부 추상화 | `geoai_common.llm.LanguageModel` 프로토콜 + OpenAI 호환 구현 하나. 주소·모델 이름만 바꿔 외부 API와 vLLM을 교체. |
 | 이미지·차트 버전 고정 | 모든 이미지 태그 고정(`latest` 금지), 파이썬 의존성 해시 고정(이미지 4종 각각 `requirements.lock`). Helm 차트는 아직 쓰지 않으며 도입 시 버전을 고정한다. |
-| 모델 가중치 | 사전 학습 가중치(`pretrained_uri`)는 데이터·모델 저장소에서만 읽는다. 처리 도구는 기동 중 아무것도 내려받지 않는다. |
+| 모델 가중치 | 사전 학습 가중치(`pretrained_uri`)는 데이터·모델 저장소에서만 읽는다. 변화탐지의 초기 가중치도 같은 저장소의 건물 추출 모델이다. 처리 도구는 기동 중 아무것도 내려받지 않는다. |
 | 화면 | 운영 콘솔은 외부 글꼴·스크립트·지도 타일을 쓰지 않는다. |
 
 데이터·모델 저장소는 S3 API로만 접근하므로 S3 호환 제품을 바꿔도 코드는 그대로다. 이 골격을 만들 때 Docker Hub에서 `minio/minio` 이미지를 받을 수 없어 Apache-2.0 라이선스의 SeaweedFS [8]를 썼다.
@@ -195,21 +226,24 @@ kubectl -n geoai-jobs create secret generic geoai-object-store-client \
 
 | 항목 | 결과 |
 |---|---|
-| 단위 시험 (온톨로지, 실행 작업 유형 등록제, 메시지, 계획기, 완료 기준 판정, 전문 에이전트 접수·검증·실패 보고, 운영 콘솔 API, 쿠버네티스 Job 명세) | 64건 통과 |
-| 처리 도구 시험 (5종 연쇄 실행, 좌표 참조 체계 누락·라벨 범위 밖·미등록 진입점 실패 처리) | 7건 통과 |
+| 단위 시험 (온톨로지, 실행 작업 유형 등록제·분야 전용 작업 선택, 취득 시점 OWL-Time 변환, 메시지, 계획기, 완료 기준 판정, 전문 에이전트 접수·검증·시점 수 부족 거절, 운영 콘솔 API, 쿠버네티스 Job 명세·메모리 상한) | 67건 통과 |
+| 처리 도구 시험 (단일 시점 5종 연쇄, 라이다 격자화, 다시기 정합, 변화 라벨 도출, 가중치 이전, 실패 처리) | 14건 통과 |
 | 건물 추출 종단 시험 (콘솔 요청 → 5단계 실제 실행 → 완료 기준 판정, 기준 미달 빨간 알림, 라벨 원천 누락 실패) | 3건 통과, 약 70초(중앙 처리 장치 4코어) |
+| 변화탐지 종단 시험 (두 시점 영상·라이다 → 생성·가공 → 변화 라벨 → 건물 추출 모델 이전 학습 → 평가, 단일 시점 요청 빨간 실패) | 2건 통과, 약 90초(중앙 처리 장치 4코어) |
 | 일체형 실행 측정 (합성 영상 2048×2048, 타일 256, 20세대, 중앙 처리 장치) | 시험 집합 IoU 0.950, F1 0.975, 객체 F1 0.994, 학습 119초 |
+| 변화탐지 측정 (합성 두 시점 1024×1024, 타일 128, 50세대, 건물 추출 모델 초기 가중치) | 유형 평균 IoU 0.605, 변화 여부 F1 0.863·IoU 0.759, 객체 F1 0.545. 유형별 IoU: 멸실 0.818, 신축 0.796, 변경 0.202 (토지 변화는 시험 집합에 없음) |
 | 통합 시험 (PostgreSQL 비교 후 교환·작업 목록·메시지 기록, NATS+PostgreSQL 종단 흐름, 배달 불가 주제) | 이번 변경분은 지속적 통합에서 확인 |
 | 매니페스트 생성·스키마 검증, 이미지 빌드 | 지속적 통합에서 확인 (작업 환경에서 Docker 데몬·Kustomize 실행 불가) |
 | 실제 쿠버네티스 클러스터 배포, 그래픽 처리 장치 학습, 실제 항공 영상 | 미실시 |
 
-합성 영상 성능은 파이프라인 동작 확인용이며 실제 항공 영상 성능을 뜻하지 않는다.
+합성 영상 성능은 파이프라인 동작 확인용이며 실제 항공 영상 성능을 뜻하지 않는다. 건물 변경 유형은 윤곽 차이가 좁은 띠 모양이라 IoU가 낮다.
 
 ## 6. 다음 단계에서 붙일 것
 
 - 작업 실행 엔진: 이번 단계는 쿠버네티스 Job 실행기로 붙였다. 설계서의 Argo Workflows [9]는 같은 작업 실행기 규약(`JobRunner`) 뒤에 구현을 하나 더해 바꾼다.
 - 완료 기준 미달 시 재계획(설계서 6장 7단계, 상한 2회). 이번 단계는 미달을 운영자에게 넘기는 데까지다.
 - 기반 운영 에이전트(마감 초과·멈춘 실행 작업 정리), 온톨로지 등록·검증 서비스
+- 변화탐지: 세 시점 이상 연속 비교(지금은 첫 시점과 마지막 시점만 대조), 압축 점군(LAZ), 시점별 건물 추출 결과를 비교하는 사후 분류 비교 방식과의 성능 비교.
 - 확장 접점: 슈퍼 에이전트가 같은 봉투로 Studio Agent에 `request`를 보낸다. AIAGeoDT 연계는 `gai:dtCorrespondsTo`로 라벨 개념과 디지털 트윈 객체 클래스를 잇는다.
 
 ---
@@ -261,6 +295,23 @@ kubectl -n geoai-jobs create secret generic geoai-object-store-client \
 | 객체 F1 (Object-level F1) | 예측·정답 객체를 IoU 0.5 이상으로 1:1 대응시켜 계산한 F1 |
 | 혼동 행렬 (Confusion Matrix) | 정답 분류와 예측 분류의 조합별 화소 수 표 |
 | 오염 (Taint) / 허용 (Toleration) | 특정 작업만 노드에 올리는 쿠버네티스 표식과 그 표식을 받아들이는 설정 |
+| 변화탐지 (Change Detection) | 같은 지역의 여러 시점 자료를 비교해 달라진 곳과 변화 유형을 찾는 분석 |
+| 다시기 (Multi-temporal) | 같은 지역을 서로 다른 시점에 취득한 자료 묶음 |
+| 취득 일자 (Acquisition Date) | 영상 촬영·라이다 측량 날짜. 시점을 구분하는 기준 |
+| OWL-Time (Time Ontology in OWL) | 시간 개체(순간, 구간)를 표현하는 W3C 온톨로지 |
+| 라이다 (LiDAR, Light Detection and Ranging) | 레이저로 거리를 재서 3차원 점군을 얻는 센서 |
+| 점군 (Point Cloud) | 3차원 좌표와 속성(분류 등)을 가진 점의 모음 |
+| LAS (LASer File Format) | 미국 사진측량·원격탐사학회(ASPRS)가 정한 라이다 점군 교환 형식 |
+| 수치 표면 모델 (DSM, Digital Surface Model) | 건물·수목을 포함한 지표면 높이 격자 |
+| 수치 지형 모델 (DTM, Digital Terrain Model) | 지물을 뺀 맨땅 높이 격자 |
+| 정규화 수치 표면 모델 (nDSM, normalized DSM) | DSM − DTM. 지면 위 지물 높이 |
+| 공통 격자 (Common Grid) | 모든 시점 자료를 같은 좌표 참조 체계·해상도·원점·크기로 맞춘 격자 |
+| 상대 방사 정규화 (Relative Radiometric Normalization) | 기준 시점에 맞춰 다른 시점 영상의 밝기·색 분포를 보정하는 처리 |
+| 조기 융합 (Early Fusion) | 여러 시점·센서 입력을 채널로 쌓아 하나의 신경망에 넣는 변화탐지 구조 |
+| 전이 학습 (Transfer Learning) | 다른 과업에서 학습한 가중치를 초기값으로 써서 새 과업을 학습하는 방법 |
+| 대칭 차 (Symmetric Difference) | 두 도형 중 한쪽에만 속하는 영역 |
+| 변화 여부 F1 (foreground F1) | 변화 유형을 묻지 않고 변화 화소 대 무변화 화소로 계산한 F1 |
+| 제한 범위 (LimitRange) | 네임스페이스 안 컨테이너의 자원 기본값·상한을 정하는 쿠버네티스 객체 |
 
 ## 부록 B. 참고 문헌
 
@@ -293,3 +344,11 @@ kubectl -n geoai-jobs create secret generic geoai-object-store-client \
 [14] The Kubernetes Authors, "Jobs," Kubernetes Documentation. [Online]. Available: https://kubernetes.io/docs/concepts/workloads/controllers/job/
 
 [15] F. Milletari, N. Navab, and S.-A. Ahmadi, "V-Net: Fully convolutional neural networks for volumetric medical image segmentation," in Proc. 4th Int. Conf. 3D Vision (3DV), 2016, pp. 565–571.
+
+[16] R. Caye Daudt, B. Le Saux, and A. Boulch, "Fully convolutional siamese networks for change detection," in Proc. IEEE Int. Conf. Image Processing (ICIP), 2018, pp. 4063–4067.
+
+[17] American Society for Photogrammetry and Remote Sensing, "LAS Specification 1.4 – R15," ASPRS, Jul. 2019. [Online]. Available: https://www.asprs.org/divisions-committees/lidar-division/laser-las-file-format-exchange-activities
+
+[18] laspy contributors, "laspy: Python library for lidar LAS/LAZ IO," GitHub repository. [Online]. Available: https://github.com/laspy/laspy
+
+[19] S. Cox and C. Little, "Time Ontology in OWL," W3C Candidate Recommendation Draft, Nov. 2022. [Online]. Available: https://www.w3.org/TR/owl-time/

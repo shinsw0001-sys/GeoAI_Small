@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import sys
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -119,6 +119,10 @@ class DataAssetRef(BaseModel):
     storage_uri: str = Field(min_length=1, description="예: s3://raw/site-a/ortho.tif")
     crs: str | None = Field(default=None, description="예: EPSG:5186")
     ground_sample_distance: float | None = Field(default=None, description="미터 단위")
+    acquired_at: date | None = Field(
+        default=None,
+        description="취득(촬영·측량) 일자. 온톨로지 gai:temporalExtent(time:Instant)에 대응. 다시기 분야의 시점 구분.",
+    )
 
 
 class CompletionCriterion(BaseModel):

@@ -74,6 +74,20 @@
           "default": null,
           "description": "미터 단위",
           "title": "Ground Sample Distance"
+        },
+        "acquired_at": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "취득(촬영·측량) 일자. 온톨로지 gai:temporalExtent(time:Instant)에 대응. 다시기 분야의 시점 구분.",
+          "title": "Acquired At"
         }
       },
       "required": [

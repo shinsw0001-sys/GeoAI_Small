@@ -120,3 +120,42 @@ def test_rejection_is_returned(client):
     assert r.status_code == 422 and r.json()["reason"] == "shape_violation"
     r = client.post("/api/tasks", json=body(image_uris=["s3://raw/none.tif"]))
     assert r.status_code == 422
+
+
+CD = "https://ontology.geoai.local/domain/change-detection#Domain"
+
+
+def test_change_request_builds_dated_inputs(client):
+    client.post("/api/assets", files={"file": ("t1.las", b"LASF")})
+    cat = client.get("/api/catalog").json()
+    assert next(d for d in cat["domains"] if d["iri"] == CD)["acquisitions"] == 2
+    acq = [
+        {
+            "acquired_at": "2023-05-12",
+            "image_uris": ["s3://raw/site/a.tif"],
+            "lidar_uris": ["s3://raw/uploads/t1.las"],
+            "building_source": "s3://raw/site/b.geojson",
+        },
+        {
+            "acquired_at": "2025-05-20",
+            "image_uris": ["s3://raw/site/a.tif"],
+            "building_source": "s3://raw/site/b.geojson",
+        },
+    ]
+    r = client.post(
+        "/api/tasks",
+        json={"domain": CD, "task_type": GAI + "PreprocessingTask", "acquisitions": acq, "criteria": []},
+    )
+    assert r.status_code == 202, r.text
+    d = client.get(f"/api/tasks/{r.json()['task_id']}").json()
+    inputs = d["inputs"]
+    assert [(i["asset_type"].rsplit("#", 1)[-1], i["acquired_at"]) for i in inputs] == [
+        ("AerialImage", "2023-05-12"),
+        ("LidarPointCloud", "2023-05-12"),
+        ("AerialImage", "2025-05-20"),
+    ]
+    assert [s["acquired_at"] for s in d["request"]["parameters"]["label_sources"]] == ["2023-05-12", "2025-05-20"]
+    assets = client.get("/api/assets").json()
+    assert [p["uri"] for p in assets["point_clouds"]] == ["s3://raw/uploads/t1.las"]
+    assert client.get("/api/models").json() == {"models": []}
+    assert client.post("/api/tasks", json={"domain": CD, "task_type": GAI + "PreprocessingTask"}).status_code == 422

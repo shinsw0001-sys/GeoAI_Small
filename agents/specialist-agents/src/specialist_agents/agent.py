@@ -24,6 +24,7 @@ from geoai_common import (
     BaseAgent,
     Envelope,
     FailurePayload,
+    JobTypeInfo,
     Performative,
     ProgressPayload,
     RejectPayload,
@@ -46,10 +47,27 @@ OUTPUT_BUCKETS = [
     (str(GAI.DataAsset), "processed"),
 ]
 
-# 실행 작업별 필수 매개변수. 진입점 이름 → (매개변수, 설명)
-REQUIRED_PARAMETERS: dict[str, list[tuple[str, str]]] = {
-    "rasterize-labels": [("label_source", "참조 벡터(GeoJSON) 저장소 주소")],
+# 실행 작업별 필수 매개변수. 진입점 이름 → [(매개변수 후보, 설명)]. 후보 중 하나만 있으면 된다.
+REQUIRED_PARAMETERS: dict[str, list[tuple[tuple[str, ...], str]]] = {
+    "rasterize-labels": [(("label_source",), "참조 벡터(GeoJSON) 저장소 주소")],
+    "change-labels": [
+        (
+            ("label_sources", "label_source"),
+            "시점별 건물 윤곽·토지피복 벡터 목록 또는 변화 벡터(GeoJSON) 저장소 주소",
+        )
+    ],
 }
+
+
+def _s3_values(value: object) -> list[str]:
+    """매개변수 값 안의 저장소 주소(s3://...)를 모두 꺼낸다. 목록·사전 안쪽까지 본다."""
+    if isinstance(value, str):
+        return [value] if value.startswith("s3://") else []
+    if isinstance(value, dict):
+        return [u for v in value.values() for u in _s3_values(v)]
+    if isinstance(value, list):
+        return [u for v in value for u in _s3_values(v)]
+    return []
 
 
 def _job_id(task_id: str) -> str:
@@ -76,7 +94,7 @@ class SpecialistAgent(BaseAgent):
         return [t.iri for t in self.ontology.plannable_task_types() if t.handled_by == self.agent_type]
 
     def capabilities(self) -> dict:
-        jobs = {j.realizes: j for j in self.ontology.job_types()}
+        jobs = {j.realizes: j for j in self.ontology.job_types() if not j.domains}
         return {
             "agent_id": self.agent_id,
             "agent_type": self.agent_type,
@@ -89,6 +107,11 @@ class SpecialistAgent(BaseAgent):
                     "entrypoint": jobs[t].entrypoint if t in jobs else None,
                 }
                 for t in self.handled_task_types()
+            ],
+            "jobs": [
+                {"job_type": j.iri, "entrypoint": j.entrypoint, "realizes": j.realizes, "domains": list(j.domains)}
+                for j in self.ontology.job_types()
+                if j.realizes in self.handled_task_types()
             ],
             "running": sorted(self._running),
         }
@@ -107,18 +130,30 @@ class SpecialistAgent(BaseAgent):
         await self.send(reply)
         return reply
 
-    def _problems(self, task_type: str, entrypoint: str, request: TaskRequestPayload) -> list[tuple[str, str]]:
+    def _problems(self, task_type: str, job: JobTypeInfo, request: TaskRequestPayload) -> list[tuple[str, str]]:
         problems = []
         types = [str(a.asset_type) for a in request.inputs]
         for required in self.ontology.task_type(task_type).requires:
             if not any(self.ontology.is_subclass(t, required) for t in types):
                 problems.append(("missing_input", f"필요 입력 '{self.ontology.label(required)}' 이(가) 없습니다."))
-        for name, desc in REQUIRED_PARAMETERS.get(entrypoint, []):
-            value = request.parameters.get(name)
-            if not value:
-                problems.append(("missing_parameter", f"매개변수 {name}({desc})가 필요합니다."))
-            elif isinstance(value, str) and value.startswith("s3://") and not self.objects.exists(value):
-                problems.append(("input_not_found", f"{name} 주소에 자료가 없습니다: {value}"))
+        if job.min_acquisitions > 1:
+            dates = {a.acquired_at for a in request.inputs if a.acquired_at is not None}
+            if len(dates) < job.min_acquisitions:
+                problems.append(
+                    (
+                        "insufficient_acquisitions",
+                        f"{self.ontology.label(job.iri)}에는 취득 일자가 다른 입력이 {job.min_acquisitions}시점 이상"
+                        f" 필요합니다(현재 {len(dates)}시점).",
+                    )
+                )
+        for names, desc in REQUIRED_PARAMETERS.get(job.entrypoint, []):
+            name = next((n for n in names if request.parameters.get(n)), None)
+            if name is None:
+                problems.append(("missing_parameter", f"매개변수 {' 또는 '.join(names)}({desc})가 필요합니다."))
+                continue
+            for uri in _s3_values(request.parameters[name]):
+                if not self.objects.exists(uri):
+                    problems.append(("input_not_found", f"{name} 주소에 자료가 없습니다: {uri}"))
         for asset in request.inputs:
             if asset.storage_uri.startswith("s3://") and not self.objects.exists(asset.storage_uri):
                 problems.append(("input_not_found", f"입력 자산이 저장소에 없습니다: {asset.storage_uri}"))
@@ -136,10 +171,10 @@ class SpecialistAgent(BaseAgent):
             request = TaskRequestPayload.model_validate(envelope.payload)
         except ValidationError as exc:
             return await self._reject(envelope, "invalid_payload", str(exc))
-        job = self.ontology.job_for(task_type, [str(a.asset_type) for a in request.inputs])
+        job = self.ontology.job_for(task_type, [str(a.asset_type) for a in request.inputs], str(request.domain))
         if job is None:
             return await self._reject(envelope, "no_job_type", f"입력을 처리할 실행 작업 유형이 없습니다: {task_type}")
-        problems = await asyncio.to_thread(self._problems, task_type, job.entrypoint, request)
+        problems = await asyncio.to_thread(self._problems, task_type, job, request)
         if problems:
             return await self._reject(envelope, problems[0][0], " / ".join(p[1] for p in problems))
         if envelope.task_id in self._running:
@@ -153,6 +188,7 @@ class SpecialistAgent(BaseAgent):
             job_type=job.iri,
             entrypoint=job.entrypoint,
             accelerator=job.accelerator,
+            memory=job.memory,
             task_id=envelope.task_id,
             task_type=task_type,
             project_id=envelope.project_id,

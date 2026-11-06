@@ -97,3 +97,17 @@ def test_unknown_asset_type(onto):
     body.inputs[0].asset_type = "https://ontology.geoai.local/core#Nope"
     v = onto.validate_request(str(GAI.ModelTrainingTask), body)
     assert v and "등록되지 않은" in v[0].message
+
+
+def test_acquisition_date_becomes_owl_time_instant(onto):
+    from rdflib import Literal, Namespace
+    from rdflib.namespace import XSD
+
+    time = Namespace("http://www.w3.org/2006/time#")
+    body = request().model_dump(mode="json")
+    body["inputs"][0]["acquired_at"] = "2025-05-20"
+    g = onto.request_graph(str(GAI.ModelTrainingTask), TaskRequestPayload.model_validate(body))
+    instants = list(g.objects(None, GAI.temporalExtent))
+    assert len(instants) == 1
+    assert g.value(instants[0], time.inXSDDate) == Literal("2025-05-20", datatype=XSD.date)
+    assert onto.validate_request(str(GAI.ModelTrainingTask), TaskRequestPayload.model_validate(body)) == []

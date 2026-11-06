@@ -45,6 +45,7 @@ class JobSpec(BaseModel):
     job_type: str = Field(description="실행 작업 클래스 IRI")
     entrypoint: str = Field(description="처리 도구 진입점 (gai:toolEntrypoint)")
     accelerator: bool = False
+    memory: str | None = Field(default=None, description="메모리 요청·상한 (gai:memoryLimit). 없으면 실행기 기본값")
     task_id: str
     task_type: str
     project_id: str
@@ -194,6 +195,7 @@ def build_k8s_job(
 ) -> dict[str, Any]:
     """처리 도구 이미지로 실행 작업 하나를 수행하는 batch/v1 Job 매니페스트."""
     gpu = spec.accelerator and use_gpu
+    memory = spec.memory or memory
     limits: dict[str, str] = {"memory": memory}
     if gpu:
         limits["nvidia.com/gpu"] = "1"

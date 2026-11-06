@@ -9,7 +9,8 @@ Studio Agent의 HTTP 응용 프로그램 인터페이스로 작업을 요청·�
 - GET  /api/overview           상태별 건수, 위험 알림, 최근 작업
 - GET  /api/tasks/{task_id}    단계별 진행·지표·완료 기준 판정·산출물·메시지 기록
 - POST /api/tasks              작업 요청 (화면 입력 → 메시지 봉투 → Studio Agent)
-- GET  /api/assets             원본 자료 목록 (영상: 좌표 참조 체계·해상도 포함)
+- GET  /api/assets             원본 자료 목록 (영상: 좌표 참조 체계·해상도, 라이다 점군, 합성 표본 시점 정보)
+- GET  /api/models             학습된 모델 목록 (다른 분야 학습의 초기 가중치 선택용)
 - POST /api/assets             원본 자료 올리기
 - GET  /api/objects?uri=       저장소 객체 내려받기 (산출물 보기용)
 
@@ -29,6 +30,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,7 @@ CONSOLE_ID = "ops-console"
 CRITICAL = {"Failed", "Rejected"}
 RASTER_EXT = (".tif", ".tiff")
 VECTOR_EXT = (".geojson", ".json")
+POINT_EXT = (".las",)
 
 
 @dataclass
@@ -79,11 +82,22 @@ class CriterionIn(BaseModel):
     threshold: float
 
 
+class AcquisitionIn(BaseModel):
+    """다시기 분야의 시점 하나. 영상·라이다·시점별 벡터를 묶는다."""
+
+    acquired_at: date
+    image_uris: list[str] = Field(min_length=1)
+    lidar_uris: list[str] = Field(default_factory=list)
+    building_source: str | None = None
+    landcover_source: str | None = None
+
+
 class TaskIn(BaseModel):
     project_id: str = Field(default="", max_length=64)
     domain: str
     task_type: str
-    image_uris: list[str] = Field(min_length=1)
+    image_uris: list[str] = Field(default_factory=list)
+    acquisitions: list[AcquisitionIn] = Field(default_factory=list)
     label_source: str | None = None
     criteria: list[CriterionIn] = Field(default_factory=list)
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -307,16 +321,25 @@ def create_app(
                                 "parameters",
                                 "hyperparameters",
                                 "weights_uri",
+                                "pretrained",
+                                "bands",
+                                "class_weights",
                             )
                         }
                 elif t == GAI + "LabelSet":
                     ls = await asyncio.to_thread(load, o["storage_uri"])
                     if ls:
-                        artifacts["labels"] = {"quality": ls.get("quality"), "label_source": ls.get("label_source")}
+                        artifacts["labels"] = {
+                            k: ls.get(k)
+                            for k in ("quality", "label_source", "label_sources", "compared", "change_reference_uri")
+                        }
                 elif t == GAI + "AnalysisReadyData":
                     ard = await asyncio.to_thread(load, o["storage_uri"])
                     if ard:
-                        artifacts["ard"] = {k: ard.get(k) for k in ("split_counts", "quality", "tile_size", "crs")}
+                        artifacts["ard"] = {
+                            k: ard.get(k)
+                            for k in ("split_counts", "quality", "tile_size", "crs", "bands", "acquisitions")
+                        }
         return {
             "task": summary,
             "request": task.get("request", {}),
@@ -331,23 +354,55 @@ def create_app(
     @app.post("/api/tasks")
     async def create_task(body: TaskIn) -> JSONResponse:
         cat = await catalog()
-        inputs = []
-        for uri in body.image_uris:
+        if not body.image_uris and not body.acquisitions:
+            raise HTTPException(status_code=422, detail="입력 영상이 없습니다.")
+
+        async def image_ref(uri: str, acquired_at: date | None) -> dict:
             try:
                 split_uri(uri)
                 info = await asyncio.to_thread(raster_info, d().objects, uri)
             except Exception as exc:  # noqa: BLE001 - 사용자 입력 오류로 돌려준다
                 raise HTTPException(status_code=422, detail=f"영상을 읽지 못했습니다: {uri} ({exc})") from exc
-            inputs.append(
-                {
-                    "asset_id": uri.rsplit("/", 1)[-1],
-                    "asset_type": GAI + "AerialImage",
-                    "storage_uri": uri,
-                    "crs": info["crs"],
-                    "ground_sample_distance": info["ground_sample_distance"],
-                }
-            )
+            ref = {
+                "asset_id": uri.rsplit("/", 1)[-1],
+                "asset_type": GAI + "AerialImage",
+                "storage_uri": uri,
+                "crs": info["crs"],
+                "ground_sample_distance": info["ground_sample_distance"],
+            }
+            if acquired_at:
+                ref["acquired_at"] = acquired_at.isoformat()
+            return ref
+
+        inputs = [await image_ref(uri, None) for uri in body.image_uris]
         params = dict(body.parameters)
+        label_sources = []
+        for acq in sorted(body.acquisitions, key=lambda a: a.acquired_at):
+            refs = [await image_ref(uri, acq.acquired_at) for uri in acq.image_uris]
+            inputs.extend(refs)
+            for uri in acq.lidar_uris:
+                if not uri.lower().endswith(POINT_EXT):
+                    raise HTTPException(status_code=422, detail=f"라이다 점군은 LAS(.las)여야 합니다: {uri}")
+                # 점군의 좌표 참조 체계는 파일 안 WKT 를 처리 도구가 우선 읽는다. 여기서는 같은 시점 영상 값을 둔다.
+                inputs.append(
+                    {
+                        "asset_id": uri.rsplit("/", 1)[-1],
+                        "asset_type": GAI + "LidarPointCloud",
+                        "storage_uri": uri,
+                        "crs": refs[0]["crs"],
+                        "acquired_at": acq.acquired_at.isoformat(),
+                    }
+                )
+            if acq.building_source or acq.landcover_source:
+                label_sources.append(
+                    {
+                        "acquired_at": acq.acquired_at.isoformat(),
+                        "buildings": acq.building_source,
+                        "landcover": acq.landcover_source,
+                    }
+                )
+        if label_sources:
+            params["label_sources"] = label_sources
         if body.label_source:
             params["label_source"] = body.label_source
         project = re.sub(r"[^a-z0-9-]", "-", (body.project_id or d().settings.default_project).lower()).strip("-")
@@ -392,25 +447,66 @@ def create_app(
     @app.get("/api/assets")
     async def assets() -> dict:
         objs = await asyncio.to_thread(d().objects.list, "s3://raw/")
-        images, vectors = [], []
+        images, vectors, clouds, presets = [], [], [], []
         for o in objs:
             name = o.uri.lower()
             if name.endswith(RASTER_EXT):
                 images.append({"uri": o.uri, "size": o.size})
-            elif name.endswith(VECTOR_EXT) and not name.endswith("sample.json"):
+            elif name.endswith(POINT_EXT):
+                clouds.append({"uri": o.uri, "size": o.size})
+            elif name.endswith("sample.json"):
+                try:
+                    meta = await asyncio.to_thread(get_json, d().objects, o.uri)
+                except Exception:  # noqa: BLE001
+                    log.warning("표본 등록 정보 읽기 실패: %s", o.uri)
+                    continue
+                if isinstance(meta, dict) and meta.get("acquisitions"):
+                    presets.append(meta)
+            elif name.endswith(VECTOR_EXT):
                 vectors.append({"uri": o.uri, "size": o.size})
         for img in images:
             try:
                 img.update(await asyncio.to_thread(raster_info, d().objects, img["uri"]))
             except Exception:  # noqa: BLE001
                 img["error"] = "영상 머리부를 읽지 못했습니다."
-        return {"images": images, "vectors": vectors}
+        return {"images": images, "vectors": vectors, "point_clouds": clouds, "presets": presets}
+
+    @app.get("/api/models")
+    async def models() -> dict:
+        objs = await asyncio.to_thread(d().objects.list, "s3://models/")
+        out = []
+        for o in objs:
+            if not o.uri.endswith("/model.json"):
+                continue
+            try:
+                card = await asyncio.to_thread(get_json, d().objects, o.uri)
+            except Exception:  # noqa: BLE001
+                log.warning("모델 명세 읽기 실패: %s", o.uri)
+                continue
+            if not isinstance(card, dict) or card.get("kind") != "segmentation-model":
+                continue
+            arch = card.get("architecture", {})
+            out.append(
+                {
+                    "uri": o.uri,
+                    "domain": card.get("domain"),
+                    "val_IoU": card.get("val_IoU"),
+                    "in_channels": arch.get("in_channels"),
+                    "num_classes": arch.get("num_classes"),
+                    "base_channels": arch.get("base_channels"),
+                    "classes": [c.get("label") for c in card.get("classes", [])[1:]],
+                    "task_id": o.uri.split("/")[-3] if o.uri.count("/") >= 5 else "",
+                }
+            )
+        return {"models": out}
 
     @app.post("/api/assets")
     async def upload(file: UploadFile) -> dict:
         name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(file.filename or "upload").name)
-        if not name.lower().endswith(RASTER_EXT + VECTOR_EXT):
-            raise HTTPException(status_code=422, detail="GeoTIFF(.tif) 또는 GeoJSON(.geojson)만 올릴 수 있습니다.")
+        if not name.lower().endswith(RASTER_EXT + VECTOR_EXT + POINT_EXT):
+            raise HTTPException(
+                status_code=422, detail="GeoTIFF(.tif), GeoJSON(.geojson), 라이다 LAS(.las)만 올릴 수 있습니다."
+            )
         uri = f"s3://raw/uploads/{name}"
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / name

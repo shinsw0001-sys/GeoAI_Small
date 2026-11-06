@@ -97,3 +97,40 @@ def test_k8s_job_manifest():
     cpu = build_k8s_job(spec(True), namespace="n", image="i", s3_secret="s", s3_endpoint="e", use_gpu=False)
     assert "nvidia.com/gpu" not in cpu["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]
     assert len(k8s_job_name("x" * 100)) <= 63
+
+
+CD = "https://ontology.geoai.local/domain/change-detection#"
+
+
+def test_domain_specific_job_selection(onto):
+    images = [str(GAI.AerialImage), str(GAI.LidarPointCloud)]
+    # 분야 전용 실행 작업을 범용보다 먼저 고르고, 다른 분야에는 쓰지 않는다
+    mt = onto.job_for(str(GAI.GeoDataProductionTask), images, CD + "Domain")
+    assert (mt.entrypoint, mt.min_acquisitions, mt.memory) == ("multitemporal-ingest", 2, "16Gi")
+    assert onto.job_for(str(GAI.GeoDataProductionTask), images, BLD + "Domain").entrypoint == "ortho-ingest"
+    assert onto.job_for(str(GAI.GeoDataProductionTask), images).entrypoint == "ortho-ingest"
+    ard = [str(GAI.AnalysisReadyData)]
+    assert onto.job_for(str(GAI.LabelingTask), ard, CD + "Domain").entrypoint == "change-labels"
+    assert onto.job_for(str(GAI.LabelingTask), ard, BLD + "Domain").entrypoint == "rasterize-labels"
+    # 전처리·학습·평가는 범용 도구를 그대로 쓴다
+    assert onto.job_for(str(GAI.PreprocessingTask), [str(GAI.OrthoImage)], CD + "Domain").entrypoint == "tiling"
+    assert onto.acquisitions_required(CD + "Domain") == 2
+    assert onto.acquisitions_required(BLD + "Domain") == 1
+
+
+def test_change_detection_domain(onto):
+    concepts = onto.label_concepts(CD + "Domain")
+    assert [(c.iri.rsplit("#", 1)[-1], c.value) for c in concepts] == [
+        ("DemolishedBuilding", 1),
+        ("LandChange", 2),
+        ("ModifiedBuilding", 3),
+        ("NewBuilding", 4),
+    ]
+    assert {c["metric"] for c in onto.default_criteria(CD + "Domain")} == {"foreground_F1", "IoU"}
+
+
+def test_k8s_job_memory_from_ontology():
+    s = spec(False).model_copy(update={"memory": "16Gi"})
+    m = build_k8s_job(s, namespace="n", image="i", s3_secret="s", s3_endpoint="e")
+    res = m["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert res["requests"]["memory"] == res["limits"]["memory"] == "16Gi"

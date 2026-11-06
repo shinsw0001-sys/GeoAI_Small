@@ -88,6 +88,10 @@ jmespath==1.1.0 \
     # via
     #   boto3
     #   botocore
+laspy==2.7.0 \
+    --hash=sha256:15f5344c62a1023461996bdf5d1ba5fdd813e96694a524fee712931134f3792f \
+    --hash=sha256:f56feb5445e75d6ff12ee814aab6a35339290e75264ff277c6bf553f3025a3f5
+    # via -r requirements.in
 markupsafe==3.0.4 \
     --hash=sha256:007e1ffd9bf65bb6ee96df7b258fc632a4868dd5566037986c64781f35a36e98 \
     --hash=sha256:02fa4acbc6a3fc5c693c34d4dd8c1130b7fe99cc915181b0ddd6f72aeb296002 \
@@ -318,6 +322,7 @@ numpy==2.5.4 \
     --hash=sha256:ffa6ce09a1c6a08e9667dd9c97aa0b14184e8d18f2a14b78b2a2328c9147f076
     # via
     #   -r requirements.in
+    #   laspy
     #   rasterio
     #   shapely
 nvidia-cublas==13.4.1.3 \

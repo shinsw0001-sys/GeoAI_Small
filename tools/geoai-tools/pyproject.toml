@@ -13,6 +13,7 @@ dependencies = [
     "rasterio==1.5.2",
     "shapely==2.2.0",
     "torch==2.15.0",
+    "laspy==2.7.0",
 ]
 
 [project.scripts]

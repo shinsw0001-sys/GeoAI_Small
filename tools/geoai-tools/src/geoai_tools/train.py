@@ -5,7 +5,11 @@
       손실은 교차 엔트로피 + 연성 주사위 손실. 뒤집기·90도 회전으로 증강한다.
       사전 학습 가중치(pretrained_uri)는 데이터·모델 저장소에서만 읽는다(실행 중 인터넷 의존 금지).
 산출: 모델(gai:Model) = model.json(구조·정규화·학습 이력) + model.pt(가중치)
-매개변수: epochs(20), batch_size(8), learning_rate(0.001), base_channels(16), seed(42), pretrained_uri(선택)
+      입력 밴드 수는 분석 준비 데이터에서 읽는다(단시기 RGB 3밴드, 다시기 RGB×시점 + 지물 높이×시점).
+      개념이 셋 이상(배경 포함)이면 교차 엔트로피에 빈도 기반 개념 가중치를 준다(class_weighting=auto).
+매개변수: epochs(20), batch_size(8), learning_rate(0.001), base_channels(16), seed(42),
+          pretrained_uri(선택: 같은 구조 가중치 .pt 또는 다른 분야 모델 명세 model.json. 모양이 다르면 전이),
+          class_weighting(auto | none | inverse_sqrt)
 """
 
 from __future__ import annotations
@@ -16,11 +20,11 @@ import time
 import numpy as np
 import torch
 from geoai_common.messages import DataAssetRef
-from geoai_common.objectstore import put_json
+from geoai_common.objectstore import get_json, put_json
 from torch import nn
 
 from .data import load_labelled
-from .model import UNet, confusion, dice_loss, normalize, pick_device, pixel_metrics
+from .model import UNet, class_weights, confusion, dice_loss, normalize, pick_device, pixel_metrics, transfer_weights
 from .runtime import ToolContext, ToolError, ToolOutput
 
 GAI = "https://ontology.geoai.local/core#"
@@ -68,14 +72,40 @@ def run(ctx: ToolContext) -> ToolOutput:
     y_train = torch.from_numpy(tiles.masks[train_idx].astype(np.int64))
     x_val = normalize(tiles.images[val_idx], norm["mean"], norm["std"])
 
-    model = UNet(num_classes=n_cls, base=base).to(device)
+    in_ch = int(tiles.images.shape[1])
+    model = UNet(in_channels=in_ch, num_classes=n_cls, base=base)
     pretrained = ctx.spec.parameters.get("pretrained_uri")
+    transfer = None
     if pretrained:
-        state = torch.load(io.BytesIO(ctx.store.get_bytes(pretrained)), map_location=device, weights_only=True)
-        model.load_state_dict(state)
+        ctx.progress(3, "사전 학습 가중치 읽기 (데이터·모델 저장소)")
+        source = {"uri": pretrained}
+        weights_uri = pretrained
+        if pretrained.endswith(".json"):
+            src_card = get_json(ctx.store, pretrained)
+            weights_uri = src_card["weights_uri"]
+            source.update({"domain": src_card.get("domain"), "val_IoU": src_card.get("val_IoU")})
+            if src_card["architecture"].get("base_channels") != base:
+                raise ToolError(
+                    "pretrained_mismatch",
+                    f"사전 학습 모델 기본 채널 {src_card['architecture'].get('base_channels')} ≠ 요청 {base}",
+                )
+        state = torch.load(io.BytesIO(ctx.store.get_bytes(weights_uri)), map_location="cpu", weights_only=True)
+        info = tiles.manifest.get("band_info") or []
+        groups = [
+            [i for i, b in enumerate(info) if b.get("acquired_at") == d and b["kind"] in ("red", "green", "blue")]
+            for d in dict.fromkeys(b.get("acquired_at") for b in info if b["kind"] == "red")
+        ] or [[0, 1, 2]]
+        transfer = {**source, **transfer_weights(model, state, groups)}
+        if transfer["copied"] + transfer["adapted"] == 0:
+            raise ToolError("pretrained_mismatch", "사전 학습 가중치에서 옮길 수 있는 층이 없습니다.")
+    model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr * 3, total_steps=epochs * -(-len(train_idx) // batch))
-    ce = nn.CrossEntropyLoss()
+    weighting = str(ctx.spec.parameters.get("class_weighting", "auto"))
+    weights = None
+    if weighting == "inverse_sqrt" or (weighting == "auto" and n_cls > 2):
+        weights = class_weights(tiles.masks[train_idx], n_cls)
+    ce = nn.CrossEntropyLoss(weight=weights.to(device) if weights is not None else None)
 
     history, best, best_state, best_epoch = [], -1.0, None, 0
     started = time.monotonic()
@@ -111,7 +141,12 @@ def run(ctx: ToolContext) -> ToolOutput:
     ctx.store.put_bytes(weights_uri, buf.getvalue())
     card = {
         "kind": "segmentation-model",
-        "architecture": {"name": "unet", "in_channels": 3, "num_classes": n_cls, "base_channels": base, "depth": 4},
+        "architecture": {"name": "unet", "in_channels": in_ch, "num_classes": n_cls, "base_channels": base, "depth": 4},
+        "domain": ctx.spec.domain,
+        "bands": tiles.manifest.get("bands"),
+        "band_info": tiles.manifest.get("band_info"),
+        "pretrained": transfer,
+        "class_weights": weights.round(decimals=4).tolist() if weights is not None else None,
         "parameters": int(sum(p.numel() for p in model.parameters())),
         "classes": labels["classes"],
         "normalization": norm,
