@@ -86,6 +86,11 @@ async def test_end_to_end_over_nats_and_postgres(onto):
         children = await store.list_children(parent.task_id)
         assert len(children) == 5 and all(c.status is TaskStatus.SUCCEEDED for c in children)
         assert result.traceparent == req.traceparent
+        # 운영 콘솔 조회용: 최상위 작업 목록과 대화 메시지 기록
+        assert parent.task_id in [t.task_id for t in await store.list_tasks(project_id=parent.project_id, limit=200)]
+        history = await store.list_messages(parent.conversation_id)
+        assert history[0].message_id == req.message_id
+        assert {m.performative for m in history} >= {Performative.REQUEST, Performative.ACCEPT, Performative.RESULT}
     finally:
         await bus.close()
         await store.close()

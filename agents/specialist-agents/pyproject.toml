@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "specialist-agents"
+version = "0.1.0"
+description = "GeoAI Studio 전문 에이전트 4종(공간정보 생성·가공, 전처리, 모델·학습, 분석·평가): 작업 접수 판단, 실행 작업 제출, 산출물 검증·보고"
+requires-python = ">=3.12"
+dependencies = [
+    "geoai-common[nats,postgres,s3]==0.1.0",
+    "fastapi==0.162.0",
+    "uvicorn==0.38.0",
+]
+
+[project.scripts]
+specialist-agent = "specialist_agents.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/specialist_agents"]

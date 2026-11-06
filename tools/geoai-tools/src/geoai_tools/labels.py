@@ -1,0 +1,150 @@
+"""벡터 라벨 래스터화 (job:VectorLabelRasterizeJob, 진입점 rasterize-labels).
+
+입력: 분석 준비 데이터(gai:AnalysisReadyData)
+      + 매개변수 label_source: 참조 벡터 GeoJSON 주소(s3://raw/...). 예: 건물 윤곽(수치지도·건물 통합정보)
+처리: 1) 참조 벡터 좌표 참조 체계 판별(GeoJSON `crs` 멤버 → 매개변수 label_crs → EPSG:4326)
+      2) 분석 준비 데이터 좌표 참조 체계로 변환, 기하 오류 수정(make_valid), 빈 기하 제거
+      3) 지물 속성 `class` 를 분야 라벨 체계 개념(지역명 또는 한글 이름)과 맞춘다. 속성이 없으면 첫 개념.
+      4) 타일마다 라벨 마스크로 래스터화(배경 0, 개념 화소값 1, 2, ...)
+품질 검사: 라벨이 영상과 겹치지 않으면 실패(label_no_overlap)
+산출: 라벨 세트(gai:LabelSet) = manifest.json + masks.npz
+"""
+
+from __future__ import annotations
+
+import io
+import json
+
+import numpy as np
+from geoai_common.messages import DataAssetRef
+from geoai_common.objectstore import get_json, put_json
+from rasterio import Affine
+from rasterio.crs import CRS
+from rasterio.features import rasterize
+from rasterio.warp import transform_geom
+from shapely import make_valid
+from shapely.geometry import box, mapping, shape
+
+from .data import load_npz
+from .runtime import ToolContext, ToolError, ToolOutput
+
+GAI = "https://ontology.geoai.local/core#"
+
+
+def source_crs(geojson: dict, fallback: str | None) -> CRS:
+    name = (geojson.get("crs") or {}).get("properties", {}).get("name")
+    return CRS.from_user_input(name or fallback or "EPSG:4326")
+
+
+def class_value(props: dict, classes: list[dict]) -> int | None:
+    if not classes:
+        return 1
+    wanted = props.get("class")
+    if wanted is None:
+        return int(classes[0]["value"])
+    for c in classes:
+        if str(wanted) in (c["iri"].rsplit("#", 1)[-1], c["label"], c["iri"]):
+            return int(c["value"])
+    return None
+
+
+def run(ctx: ToolContext) -> ToolOutput:
+    ard = next((a for a in ctx.spec.inputs if a.asset_type.__str__().endswith("AnalysisReadyData")), None)
+    if ard is None:
+        raise ToolError("no_ard_input", "분석 준비 데이터 입력이 없습니다.")
+    source = ctx.spec.parameters.get("label_source")
+    if not source:
+        raise ToolError("missing_parameter", "label_source(참조 벡터 GeoJSON 주소)가 필요합니다.")
+
+    ctx.progress(5, "분석 준비 데이터·참조 벡터 읽기")
+    manifest = get_json(ctx.store, ard.storage_uri)
+    tiles = manifest["tiles"]
+    size = int(manifest["tile_size"])
+    valid = load_npz(ctx.store, manifest["tiles_uri"])["valid"]
+    try:
+        geojson = json.loads(ctx.store.get_bytes(source))
+    except (OSError, ValueError) as exc:
+        raise ToolError("label_source_unreadable", f"참조 벡터를 읽지 못했습니다: {source} ({exc})") from exc
+
+    src_crs = source_crs(geojson, ctx.spec.parameters.get("label_crs"))
+    dst_crs = CRS.from_user_input(manifest["crs"])
+    classes = ctx.spec.label_classes
+
+    ctx.progress(20, "좌표 변환·기하 오류 수정")
+    shapes: list[tuple] = []
+    stats = {"features": 0, "fixed_invalid": 0, "dropped_empty": 0, "unmatched_class": 0}
+    for feat in geojson.get("features", []):
+        stats["features"] += 1
+        geom = feat.get("geometry")
+        if not geom:
+            stats["dropped_empty"] += 1
+            continue
+        if src_crs != dst_crs:
+            geom = transform_geom(src_crs, dst_crs, geom)
+        g = shape(geom)
+        if not g.is_valid:
+            g = make_valid(g)
+            stats["fixed_invalid"] += 1
+        g = g.buffer(0) if g.geom_type not in ("Polygon", "MultiPolygon") else g
+        if g.is_empty or g.area <= 0:
+            stats["dropped_empty"] += 1
+            continue
+        value = class_value(feat.get("properties") or {}, classes)
+        if value is None:
+            stats["unmatched_class"] += 1
+            continue
+        shapes.append((g, value))
+
+    ctx.progress(40, f"타일 래스터화 ({len(tiles)}장)")
+    masks = np.zeros((len(tiles), size, size), dtype=np.uint8)
+    for i, t in enumerate(tiles):
+        transform = Affine(*t["transform"])
+        x0, y0 = transform @ (0, 0)
+        x1, y1 = transform @ (size, size)
+        extent = box(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+        hits = [(mapping(g), v) for g, v in shapes if g.intersects(extent)]
+        if hits:
+            masks[i] = rasterize(hits, out_shape=(size, size), transform=transform, dtype="uint8")
+        masks[i][~valid[i]] = 0
+        ctx.progress(40 + 50 * (i + 1) / len(tiles), f"타일 래스터화 {i + 1}/{len(tiles)}")
+
+    positive = float((masks > 0).mean())
+    labelled_tiles = float((masks.reshape(len(tiles), -1).max(axis=1) > 0).mean())
+    if positive == 0.0:
+        raise ToolError(
+            "label_no_overlap",
+            f"참조 벡터({stats['features']}개 지물, {src_crs.to_string()})가 영상 범위와 겹치지 않습니다.",
+        )
+
+    buf = io.BytesIO()
+    np.savez_compressed(buf, masks=masks)
+    masks_uri = ctx.out("labels", "masks.npz")
+    ctx.store.put_bytes(masks_uri, buf.getvalue())
+    labelset = {
+        "kind": "raster-label-set",
+        "ard_manifest": ard.storage_uri,
+        "label_source": source,
+        "source_crs": src_crs.to_string(),
+        "masks_uri": masks_uri,
+        "classes": [{"value": 0, "label": "배경", "iri": None}, *classes],
+        "quality": {
+            **stats,
+            "positive_pixel_ratio": round(positive, 5),
+            "labelled_tile_ratio": round(labelled_tiles, 4),
+        },
+    }
+    uri = ctx.out("labels", "manifest.json")
+    put_json(ctx.store, uri, labelset)
+    return ToolOutput(
+        outputs=[
+            DataAssetRef(
+                asset_id=f"{ctx.spec.task_id}.labels", asset_type=GAI + "LabelSet", storage_uri=uri, crs=ard.crs
+            )
+        ],
+        metrics={
+            "label_features": float(len(shapes)),
+            "fixed_invalid": float(stats["fixed_invalid"]),
+            "positive_pixel_ratio": round(positive, 5),
+            "labelled_tile_ratio": round(labelled_tiles, 4),
+        },
+    )

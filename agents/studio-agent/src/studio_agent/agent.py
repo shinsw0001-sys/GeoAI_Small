@@ -6,8 +6,12 @@ GeoAI Studio의 대표 에이전트. 처리 흐름:
 2. 온톨로지 규칙으로 하위 작업 계획 → 상위·하위 작업을 상태 저장소에 기록 → accept 답신
 3. 선행 작업이 없는 하위 작업부터 담당 에이전트에 request 발송 (Planned → Running)
 4. 하위 작업 result 수신 → Succeeded 기록 → 선행 조건이 다 찬 후속 작업 발송
-5. 모든 하위 작업 완료 → 상위 작업 Succeeded, 요청자에게 result 발송
+5. 모든 하위 작업 완료 → 마지막 단계 지표를 완료 기준과 비교
+   충족 → 상위 작업 Succeeded, 요청자에게 result 발송
+   미달 → 상위 작업 Failed(completion_criteria_not_met), 요청자에게 failure 발송. 운영자가 판단한다.
    하위 작업 failure/reject → 상위 작업 Failed, 요청자에게 failure 발송
+
+요청에 완료 기준이 없으면 분야 온톨로지의 권장 완료 기준(gai:defaultCompletionCriterion)을 쓴다.
 
 에이전트는 상태를 두지 않는다. 모든 상태는 프로젝트 상태 저장소에 있고, 상태 전이는
 비교 후 교환으로만 하므로 복제본을 여러 개 띄워도 같은 하위 작업을 두 번 보내지 않는다.
@@ -22,6 +26,7 @@ from geoai_common import (
     GAI,
     AcceptPayload,
     BaseAgent,
+    CompletionCriterion,
     DataAssetRef,
     Envelope,
     FailurePayload,
@@ -34,6 +39,7 @@ from geoai_common import (
     TaskRequestPayload,
     TaskStatus,
 )
+from geoai_common.criteria import describe_unmet, evaluate_criteria
 from pydantic import ValidationError
 
 from .planner import Planner, PlanningError
@@ -69,7 +75,17 @@ class StudioAgent(BaseAgent):
                 }
                 for t in self.ontology.plannable_task_types()
             ],
-            "domains": [{"iri": d, "label": self.ontology.label(d)} for d in self.ontology.domains()],
+            "domains": [
+                {
+                    "iri": d,
+                    "label": self.ontology.label(d),
+                    "default_criteria": self.ontology.default_criteria(d),
+                    "label_concepts": [
+                        {"iri": c.iri, "label": c.label, "value": c.value} for c in self.ontology.label_concepts(d)
+                    ],
+                }
+                for d in self.ontology.domains()
+            ],
         }
 
     # ------------------------------------------------------------------
@@ -97,6 +113,9 @@ class StudioAgent(BaseAgent):
         except ValidationError as exc:
             return await self._reject(envelope, RejectPayload(reason="invalid_payload", detail=str(exc)))
 
+        if not request.completion_criteria:
+            defaults = self.ontology.default_criteria(str(request.domain))
+            request = request.model_copy(update={"completion_criteria": [CompletionCriterion(**c) for c in defaults]})
         violations = self.ontology.validate_request(task_type, request)
         if violations:
             return await self._reject(
@@ -285,6 +304,27 @@ class StudioAgent(BaseAgent):
         children = await self.store.list_children(parent.task_id)
         if all(c.status is TaskStatus.SUCCEEDED for c in children):
             final = children[-1]
+            checks = evaluate_criteria(parent.request.get("completion_criteria", []), final.metrics)
+            if not all(c["met"] for c in checks):
+                detail = f"완료 기준 미달: {describe_unmet(checks)}"
+                failed = await self.store.transition(
+                    parent.task_id,
+                    ACTIVE,
+                    TaskStatus.FAILED,
+                    outputs=final.outputs,
+                    metrics=final.metrics,
+                    detail=detail,
+                )
+                if failed is not None:
+                    await self.send(
+                        self._to_requester(
+                            parent,
+                            envelope,
+                            Performative.FAILURE,
+                            FailurePayload(reason="completion_criteria_not_met", detail=detail),
+                        )
+                    )
+                return
             done = await self.store.transition(
                 parent.task_id, ACTIVE, TaskStatus.SUCCEEDED, outputs=final.outputs, metrics=final.metrics
             )

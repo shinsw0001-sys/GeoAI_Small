@@ -1,0 +1,35 @@
+# 실행 작업 네임스페이스(geoai-jobs) 권한
+# - geoai-job: 처리 도구 파드의 서비스 계정. 쿠버네티스 응용 프로그램 인터페이스 토큰을 붙이지 않는다.
+# - geoai-job-submitter: 전문 에이전트 4종이 Job 을 만들고 상태를 읽는 권한(이 네임스페이스 한정).
+# 비밀(Secret) geoai-object-store-client 는 오버레이가 만든다 (키: access-key, secret-key).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: geoai-job
+  namespace: geoai-jobs
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: geoai-job-submitter
+  namespace: geoai-jobs
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, watch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: geoai-job-submitter
+  namespace: geoai-jobs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: geoai-job-submitter
+subjects:
+  - {kind: ServiceAccount, name: geo-data-production-agent, namespace: geoai}
+  - {kind: ServiceAccount, name: preprocessing-agent, namespace: geoai}
+  - {kind: ServiceAccount, name: model-training-agent, namespace: geoai}
+  - {kind: ServiceAccount, name: analysis-evaluation-agent, namespace: geoai}

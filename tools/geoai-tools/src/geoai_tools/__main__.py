@@ -1,0 +1,71 @@
+"""처리 도구 명령.
+
+geoai-tools run --spec <명세 파일 | s3://주소>     실행 작업 하나 수행 (작업 실행기가 호출)
+geoai-tools run --spec-env GEOAI_JOB_SPEC           명세를 환경 변수에서 읽기 (쿠버네티스 Job)
+geoai-tools sample [--size 2048] [--prefix s3://raw/sample]
+                                                    합성 항공 영상·건물 윤곽을 데이터·모델 저장소에 넣기
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+from geoai_common.jobs import JobSpec
+from geoai_common.objectstore import get_json, join_uri, object_store_from_env, put_json
+
+from . import ENTRYPOINTS
+from .runtime import run_job
+from .sample import CRS, GSD, generate
+
+
+def _load_spec(args: argparse.Namespace, store) -> JobSpec:  # type: ignore[no-untyped-def]
+    if args.spec_env:
+        return JobSpec.model_validate_json(os.environ[args.spec_env])
+    if args.spec.startswith("s3://"):
+        return JobSpec.model_validate(get_json(store, args.spec))
+    return JobSpec.model_validate_json(Path(args.spec).read_text(encoding="utf-8"))
+
+
+def seed_sample(store, prefix: str = "s3://raw/sample", size: int = 2048, seed: int = 7) -> dict:  # type: ignore[no-untyped-def]
+    """합성 자료를 저장소에 올리고 등록 정보(sidecar)를 함께 쓴다."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tif, geojson = generate(tmp, size=size, seed=seed)
+        image_uri = join_uri(prefix, tif.name)
+        vector_uri = join_uri(prefix, geojson.name)
+        store.put_file(image_uri, tif)
+        store.put_file(vector_uri, geojson)
+    meta = {"image": image_uri, "label_source": vector_uri, "crs": CRS, "ground_sample_distance": GSD, "size_px": size}
+    put_json(store, join_uri(prefix, "sample.json"), meta)
+    return meta
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    parser = argparse.ArgumentParser(prog="geoai-tools")
+    sub = parser.add_subparsers(dest="command", required=True)
+    run = sub.add_parser("run")
+    src = run.add_mutually_exclusive_group(required=True)
+    src.add_argument("--spec")
+    src.add_argument("--spec-env")
+    sample = sub.add_parser("sample")
+    sample.add_argument("--prefix", default="s3://raw/sample")
+    sample.add_argument("--size", type=int, default=2048)
+    sample.add_argument("--seed", type=int, default=7)
+    args = parser.parse_args(argv)
+
+    store = object_store_from_env()
+    if args.command == "sample":
+        print(json.dumps(seed_sample(store, args.prefix, args.size, args.seed), ensure_ascii=False))
+        return 0
+    result = run_job(_load_spec(args, store), store, ENTRYPOINTS)
+    return 0 if result.status == "succeeded" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
