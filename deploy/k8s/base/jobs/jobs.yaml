@@ -33,3 +33,17 @@ subjects:
   - {kind: ServiceAccount, name: preprocessing-agent, namespace: geoai}
   - {kind: ServiceAccount, name: model-training-agent, namespace: geoai}
   - {kind: ServiceAccount, name: analysis-evaluation-agent, namespace: geoai}
+---
+# 실행 작업 컨테이너 메모리 상한. 실행 작업 유형이 온톨로지(gai:memoryLimit)로 더 큰 값을 선언할 수 있다
+# (다시기 영상·라이다 정합 16Gi). 그보다 큰 요청은 거부해 한 작업이 노드를 독점하지 않게 한다.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: geoai-job-limits
+  namespace: geoai-jobs
+spec:
+  limits:
+    - type: Container
+      max: {memory: 16Gi}
+      default: {memory: 8Gi}
+      defaultRequest: {memory: 8Gi}

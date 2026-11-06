@@ -4,6 +4,8 @@ geoai-tools run --spec <명세 파일 | s3://주소>     실행 작업 하나 �
 geoai-tools run --spec-env GEOAI_JOB_SPEC           명세를 환경 변수에서 읽기 (쿠버네티스 Job)
 geoai-tools sample [--size 2048] [--prefix s3://raw/sample]
                                                     합성 항공 영상·건물 윤곽을 데이터·모델 저장소에 넣기
+geoai-tools sample --kind change [--size 1024] [--prefix s3://raw/sample-change]
+                                                    합성 두 시점 영상·라이다·건물 윤곽·토지피복을 넣기
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from geoai_common.objectstore import get_json, join_uri, object_store_from_env, 
 from . import ENTRYPOINTS
 from .runtime import run_job
 from .sample import CRS, GSD, generate
+from .sample_change import generate_change
 
 
 def _load_spec(args: argparse.Namespace, store) -> JobSpec:  # type: ignore[no-untyped-def]
@@ -45,6 +48,30 @@ def seed_sample(store, prefix: str = "s3://raw/sample", size: int = 2048, seed: 
     return meta
 
 
+def seed_change_sample(store, prefix: str = "s3://raw/sample-change", size: int = 1024, seed: int = 11) -> dict:  # type: ignore[no-untyped-def]
+    """합성 변화탐지 자료(두 시점)를 올리고 등록 정보(sample.json)를 쓴다. 운영 콘솔이 시점 입력을 미리 채운다."""
+    with tempfile.TemporaryDirectory() as tmp:
+        files = generate_change(tmp, size=size, seed=seed)
+        acquisitions = []
+        for f in files:
+            entry = {"acquired_at": f["acquired_at"]}
+            for key in ("image", "lidar", "buildings", "landcover"):
+                uri = join_uri(prefix, f[key].name)
+                store.put_file(uri, f[key])
+                entry[key] = uri
+            acquisitions.append(entry)
+    meta = {
+        "kind": "change-detection",
+        "domain": "https://ontology.geoai.local/domain/change-detection#Domain",
+        "acquisitions": acquisitions,
+        "crs": CRS,
+        "ground_sample_distance": GSD,
+        "size_px": size,
+    }
+    put_json(store, join_uri(prefix, "sample.json"), meta)
+    return meta
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     parser = argparse.ArgumentParser(prog="geoai-tools")
@@ -56,12 +83,18 @@ def main(argv: list[str] | None = None) -> int:
     sample = sub.add_parser("sample")
     sample.add_argument("--prefix", default="s3://raw/sample")
     sample.add_argument("--size", type=int, default=2048)
-    sample.add_argument("--seed", type=int, default=7)
+    sample.add_argument("--seed", type=int, default=None)
+    sample.add_argument("--kind", choices=["building", "change"], default="building")
     args = parser.parse_args(argv)
 
     store = object_store_from_env()
     if args.command == "sample":
-        print(json.dumps(seed_sample(store, args.prefix, args.size, args.seed), ensure_ascii=False))
+        if args.kind == "change":
+            prefix = args.prefix if args.prefix != "s3://raw/sample" else "s3://raw/sample-change"
+            meta = seed_change_sample(store, prefix, args.size if args.size != 2048 else 1024, args.seed or 11)
+        else:
+            meta = seed_sample(store, args.prefix, args.size, args.seed or 7)
+        print(json.dumps(meta, ensure_ascii=False))
         return 0
     result = run_job(_load_spec(args, store), store, ENTRYPOINTS)
     return 0 if result.status == "succeeded" else 1

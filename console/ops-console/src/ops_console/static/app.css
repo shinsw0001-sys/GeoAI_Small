@@ -213,3 +213,16 @@ details summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   .table-wrap table { min-width: 640px; }
   .table-wrap th, .table-wrap td { white-space: nowrap; }
 }
+
+/* 다시기 입력(변화탐지): 시점별 묶음 */
+.acq-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+fieldset.acq {
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px 12px; margin: 0;
+  background: var(--surface-2); display: grid; gap: 8px;
+}
+fieldset.acq legend { font-weight: 600; padding: 0 4px; }
+fieldset.acq label { display: grid; gap: 2px; font-size: 13px; color: var(--muted); }
+fieldset.acq select, fieldset.acq input { width: 100%; }
+/* 변화 유형 색 견본. 유형 색은 처리 도구가 정한 차분한 색이며 빨간 계열을 쓰지 않는다. */
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend { flex-wrap: wrap; }

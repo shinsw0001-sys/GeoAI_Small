@@ -137,3 +137,59 @@ def test_unknown_agent_id(onto, tmp_path):
         SpecialistAgent(
             "nope-agent", InMemoryBus(), InMemoryStateStore(), onto, objects=LocalObjectStore(tmp_path), runner=None
         )
+
+
+CD = "https://ontology.geoai.local/domain/change-detection#Domain"
+
+
+def raw(uri, kind="AerialImage", date=None):
+    a = {"asset_id": uri.rsplit("/", 1)[-1], "asset_type": str(GAI[kind]), "storage_uri": uri, "crs": "EPSG:5186"}
+    if date:
+        a["acquired_at"] = date
+    return a
+
+
+def change_request(task, inputs, **params):
+    e = request(task, inputs, **params)
+    e.payload["domain"] = CD
+    return e
+
+
+async def test_change_ingest_needs_two_dates(onto, tmp_path):
+    bus, agent, runner, objects, _ = await make(onto, tmp_path, agent_id="geo-data-production-agent")
+    for u in ("s3://raw/a.tif", "s3://raw/b.tif", "s3://raw/a.las"):
+        objects.put_bytes(u, b"x")
+    reply = await agent.handle(change_request("GeoDataProductionTask", [raw("s3://raw/a.tif", date="2023-05-12")]))
+    assert reply.payload["reason"] == "insufficient_acquisitions"
+    inputs = [
+        raw("s3://raw/a.tif", date="2023-05-12"),
+        raw("s3://raw/b.tif", date="2025-05-20"),
+        raw("s3://raw/a.las", "LidarPointCloud", "2023-05-12"),
+    ]
+    reply = await agent.handle(change_request("GeoDataProductionTask", inputs))
+    assert reply.performative is Performative.ACCEPT
+    await agent.wait_idle()
+    spec = runner.specs[0]
+    assert (spec.entrypoint, spec.memory) == ("multitemporal-ingest", "16Gi")
+    assert [str(a.acquired_at) for a in spec.inputs] == ["2023-05-12", "2025-05-20", "2023-05-12"]
+
+
+async def test_change_labels_parameters(onto, tmp_path):
+    _, agent, runner, objects, _ = await make(onto, tmp_path, agent_id="model-training-agent")
+    ard = {"asset_id": "a", "asset_type": str(GAI.AnalysisReadyData), "storage_uri": "s3://processed/p1/m.json"}
+    objects.put_bytes(ard["storage_uri"], b"{}")
+    objects.put_bytes("s3://raw/b1.geojson", b"{}")
+    reply = await agent.handle(change_request("LabelingTask", [ard]))
+    assert reply.payload["reason"] == "missing_parameter" and "label_sources" in reply.payload["detail"]
+    sources = [
+        {"acquired_at": "2023-05-12", "buildings": "s3://raw/b1.geojson"},
+        {"acquired_at": "2025-05-20", "buildings": "s3://raw/b2.geojson"},
+    ]
+    reply = await agent.handle(change_request("LabelingTask", [ard], label_sources=sources))
+    assert reply.payload["reason"] == "input_not_found" and "b2.geojson" in reply.payload["detail"]
+    objects.put_bytes("s3://raw/b2.geojson", b"{}")
+    reply = await agent.handle(change_request("LabelingTask", [ard], label_sources=sources))
+    assert reply.performative is Performative.ACCEPT
+    await agent.wait_idle()
+    assert runner.specs[0].entrypoint == "change-labels"
+    assert [c["value"] for c in runner.specs[0].label_classes] == [1, 2, 3, 4]

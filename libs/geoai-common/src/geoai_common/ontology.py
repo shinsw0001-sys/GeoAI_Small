@@ -17,12 +17,13 @@ from functools import cache
 from pathlib import Path
 
 from pyshacl import validate
-from rdflib import OWL, RDF, RDFS, SH, SKOS, Graph, Literal, Namespace, URIRef
+from rdflib import OWL, RDF, RDFS, SH, SKOS, BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
 
 from .messages import TaskRequestPayload, Violation
 
 GAI = Namespace("https://ontology.geoai.local/core#")
+TIME = Namespace("http://www.w3.org/2006/time#")
 CORE_ONTOLOGY_IRI = URIRef("https://ontology.geoai.local/core")
 REQUEST_NS = Namespace("urn:geoai:request:")
 
@@ -38,6 +39,9 @@ class JobTypeInfo:
     output_type: str | None
     entrypoint: str
     accelerator: bool
+    domains: tuple[str, ...] = ()  # gai:forDomain. 비면 범용
+    min_acquisitions: int = 0  # gai:minAcquisitionDates
+    memory: str | None = None  # gai:memoryLimit
 
 
 @dataclass(frozen=True)
@@ -168,6 +172,8 @@ class OntologyRegistry:
                 continue
             output = self.graph.value(node, GAI.jobOutputType)
             accel = self.graph.value(node, GAI.requiresAccelerator)
+            min_acq = self.graph.value(node, GAI.minAcquisitionDates)
+            memory = self.graph.value(node, GAI.memoryLimit)
             out.append(
                 JobTypeInfo(
                     iri=iri,
@@ -177,19 +183,33 @@ class OntologyRegistry:
                     output_type=str(output) if output else None,
                     entrypoint=str(entry),
                     accelerator=bool(accel.toPython()) if isinstance(accel, Literal) else False,
+                    domains=tuple(sorted(str(d) for d in self.graph.objects(node, GAI.forDomain))),
+                    min_acquisitions=int(min_acq.toPython()) if isinstance(min_acq, Literal) else 0,
+                    memory=str(memory) if memory is not None else None,
                 )
             )
         return out
 
-    def job_for(self, task_type: str, input_types: list[str]) -> JobTypeInfo | None:
-        """작업 유형을 실현하고 입력을 처리할 수 있는 실행 작업 유형. 여럿이면 IRI 순 첫 번째."""
-        for job in sorted(self.job_types(), key=lambda j: j.iri):
+    def job_for(self, task_type: str, input_types: list[str], domain: str | None = None) -> JobTypeInfo | None:
+        """작업 유형을 실현하고 입력을 처리할 수 있는 실행 작업 유형.
+
+        분야 전용(gai:forDomain 이 domain 을 포함) 실행 작업을 범용보다 먼저 고르고, 다른 분야 전용은
+        고르지 않는다. 같은 순위에서는 IRI 순 첫 번째.
+        """
+        candidates = []
+        for job in self.job_types():
             if job.realizes != task_type:
+                continue
+            if job.domains and (domain is None or domain not in job.domains):
                 continue
             if job.accepts and not any(self.is_subclass(t, a) for t in input_types for a in job.accepts):
                 continue
-            return job
-        return None
+            candidates.append((0 if job.domains else 1, job.iri, job))
+        return min(candidates, key=lambda c: c[:2])[2] if candidates else None
+
+    def acquisitions_required(self, domain: str) -> int:
+        """분야 전용 실행 작업이 요구하는 최소 취득 시점 수(없으면 1). 운영 콘솔이 입력 화면을 고를 때 쓴다."""
+        return max([1, *(j.min_acquisitions for j in self.job_types() if domain in j.domains)])
 
     def default_criteria(self, domain: str) -> list[dict]:
         """분야의 권장 완료 기준 (gai:defaultCompletionCriterion)."""
@@ -244,6 +264,12 @@ class OntologyRegistry:
                 g.add(
                     (node, GAI.groundSampleDistance, Literal(str(asset.ground_sample_distance), datatype=XSD.decimal))
                 )
+            if asset.acquired_at is not None:
+                # 취득 일자: OWL-Time 순간(time:Instant)으로 gai:temporalExtent 에 붙인다.
+                instant = BNode()
+                g.add((node, GAI.temporalExtent, instant))
+                g.add((instant, RDF.type, TIME.Instant))
+                g.add((instant, TIME.inXSDDate, Literal(asset.acquired_at.isoformat(), datatype=XSD.date)))
         for idx, crit in enumerate(payload.completion_criteria):
             node = REQUEST_NS[f"criterion/{idx}"]
             g.add((task, GAI.hasCompletionCriterion, node))

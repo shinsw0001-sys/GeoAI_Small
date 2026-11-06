@@ -10,10 +10,27 @@ const PERF_KO = {
   result: "결과", failure: "실패", event: "알림",
 };
 const METRIC_KO = {
-  IoU: "IoU (건물)", mIoU: "mIoU", F1: "F1", precision: "정밀도", recall: "재현율",
+  IoU: "IoU", mIoU: "mIoU", F1: "F1", precision: "정밀도", recall: "재현율",
   object_F1: "객체 F1", object_precision: "객체 정밀도", object_recall: "객체 재현율",
   pixel_accuracy: "화소 정확도",
+  foreground_IoU: "변화 여부 IoU", foreground_F1: "변화 여부 F1",
+  foreground_precision: "변화 여부 정밀도", foreground_recall: "변화 여부 재현율",
 };
+/* 지표 이름: 개념이 하나면 그 개념 이름을, 여럿이면 "개념 평균"을 붙인다. */
+function metricLabel(key, domainIri) {
+  const d = catalog && catalog.domains.find((x) => x.iri === domainIri);
+  const concepts = (d && d.label_concepts) || [];
+  if (key === "IoU" || key === "F1") {
+    if (concepts.length === 1) return `${key} (${concepts[0].label})`;
+    if (concepts.length > 1) return `${key} (유형 평균)`;
+  }
+  return METRIC_KO[key] || key;
+}
+function domainSlug(iri) {
+  const m = String(iri).match(/\/domain\/([^#]+)/);
+  return m ? m[1] : "default";
+}
+function rgb(c) { return `rgb(${c[0]},${c[1]},${c[2]})`; }
 const AGENT_KO = {
   "geo-data-production-agent": "공간정보 생성·가공 에이전트",
   "preprocessing-agent": "전처리 에이전트",
@@ -143,12 +160,25 @@ async function dashboard() {
 const PLAN_ORDER = ["GeoDataProductionTask", "PreprocessingTask", "LabelingTask", "ModelTrainingTask", "EvaluationTask"];
 
 async function newTask() {
-  const [cat, assets] = await Promise.all([loadCatalog(), api("/api/assets")]);
+  const [cat, assets, models] = await Promise.all([loadCatalog(), api("/api/assets"), api("/api/models")]);
   const domains = cat.domains;
   const building = domains.find((d) => d.iri.includes("building-extraction")) || domains[0];
   const targets = cat.task_types.filter((t) => ["EvaluationTask", "ModelTrainingTask", "LabelingTask", "PreprocessingTask", "GeoDataProductionTask"].includes(t.task_type.split("#")[1]));
   const evalTask = targets.find((t) => t.task_type.endsWith("#EvaluationTask"));
-  const sample = assets.vectors.find((v) => v.uri.includes("sample"));
+  const sample = assets.vectors.find((v) => v.uri.includes("sample/"));
+  const preset = (assets.presets || [])[0];
+  const opt = (list, chosen, none) => `${none ? `<option value="">${esc(none)}</option>` : ""}${list.map((x) => `<option value="${esc(x.uri)}" ${x.uri === chosen ? "selected" : ""}>${shortName(x.uri)}</option>`).join("")}`;
+  const acqCard = (i) => {
+    const p = (preset && preset.acquisitions[i]) || {};
+    return `<fieldset class="acq" data-acq="${i}"><legend>시점 ${i + 1} <span class="muted">(${i === 0 ? "이전" : "이후"})</span></legend>
+      <label>취득 일자 <input type="date" name="acquired_at" value="${esc(p.acquired_at || "")}" required></label>
+      <label>영상 <select name="image">${opt(assets.images, p.image, "선택")}</select></label>
+      <label>라이다 점군 <select name="lidar">${opt(assets.point_clouds || [], p.lidar, "없음")}</select></label>
+      <label>건물 윤곽 <select name="buildings">${opt(assets.vectors, p.buildings, "없음")}</select></label>
+      <label>토지피복 <select name="landcover">${opt(assets.vectors, p.landcover, "없음")}</select></label>
+    </fieldset>`;
+  };
+  const buildingModels = models.models.filter((m) => String(m.domain || "").includes("building-extraction"));
   view.innerHTML = `
     <div class="page-head"><div><h1>새 작업 요청</h1>
       <div class="muted">영상과 참조 벡터를 고르면 Studio Agent가 온톨로지 규칙으로 단계를 계획합니다.</div></div></div>
@@ -160,12 +190,18 @@ async function newTask() {
         <select id="f-target">${targets.map((t) => `<option value="${esc(t.task_type)}" ${t === evalTask ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select>
         <div class="plan-preview" id="f-plan" style="margin-top:8px"></div>
         <div class="hint">성능 검증을 고르면 수집·가공부터 평가까지 한 번에 실행합니다.</div></div></div>
-      <div class="row"><span class="k">입력 영상</span><div>
+      <div class="row" id="f-multi" hidden><span class="k">시점별 입력</span><div>
+        <div class="acq-grid">${acqCard(0)}${acqCard(1)}</div>
+        <div class="hint">두 시점 영상은 겹치는 범위의 공통 격자로 맞춥니다. 라이다는 지물 높이 입력이 되고, 시점별 건물 윤곽·토지피복을 대조해 변화 라벨(신축·멸실·변경·토지 변화)을 만듭니다.</div></div></div>
+      <div class="row" id="f-init" hidden><label class="k" for="f-pre">초기 가중치</label><div>
+        <select id="f-pre"><option value="">없음 (처음부터 학습)</option>${buildingModels.map((m, i) => `<option value="${esc(m.uri)}" ${i === buildingModels.length - 1 ? "selected" : ""}>건물 추출 모델 · 검증 IoU ${fmt(m.val_IoU)} · ${esc(m.task_id.slice(0, 8))}</option>`).join("")}</select>
+        <div class="hint">${buildingModels.length ? "건물 추출 모델의 영상 특징을 시점마다 옮겨 심고 학습을 시작합니다." : "학습된 건물 추출 모델이 없습니다. 건물 추출 작업을 먼저 돌리면 여기서 고를 수 있습니다."}</div></div></div>
+      <div class="row" id="f-single-images"><span class="k">입력 영상</span><div>
         <div class="choices" id="f-images">${assets.images.length ? assets.images.map((a, i) => `
           <label class="choice"><input type="checkbox" name="image" value="${esc(a.uri)}" ${i === 0 ? "checked" : ""} ${a.error ? "disabled" : ""}>
           <span><span class="mono">${shortName(a.uri)}</span><br><small class="muted">${a.error ? esc(a.error) : `${esc(a.crs)} · ${fmt(a.ground_sample_distance, 2)} m · ${a.width}×${a.height}`}</small></span></label>`).join("")
           : `<div class="empty">등록된 영상이 없습니다. <a href="#/data">원본 자료</a>에서 올리세요.</div>`}</div></div></div>
-      <div class="row"><label class="k" for="f-labels">참조 벡터 (라벨 원천)</label><div>
+      <div class="row" id="f-single-labels"><label class="k" for="f-labels">참조 벡터 (라벨 원천)</label><div>
         <select id="f-labels"><option value="">선택 안 함</option>${assets.vectors.map((v) => `<option value="${esc(v.uri)}" ${v === sample ? "selected" : ""}>${shortName(v.uri)}</option>`).join("")}</select>
         <div class="hint">건물 윤곽 GeoJSON. 라벨링 단계에서 타일마다 마스크로 바꿉니다.</div></div></div>
       <div class="row"><span class="k">완료 기준</span><div><div id="f-criteria"></div>
@@ -191,11 +227,23 @@ async function newTask() {
     row.querySelector("button").addEventListener("click", () => row.remove());
     critBox.appendChild(row);
   };
+  let lastSlug = cat.default_project;
+  const isMulti = () => {
+    const d = domains.find((x) => x.iri === $("#f-domain").value);
+    return (d && d.acquisitions || 1) >= 2;
+  };
   const syncDomain = () => {
     const d = domains.find((x) => x.iri === $("#f-domain").value);
     critBox.innerHTML = "";
     (d.default_criteria || []).forEach(addCrit);
-    $("#f-domain-hint").textContent = `라벨 개념: ${(d.label_concepts || []).map((c) => c.label).join(", ") || "없음"}`;
+    const multi = isMulti();
+    $("#f-domain-hint").textContent = `라벨 개념: ${(d.label_concepts || []).map((c) => c.label).join(", ") || "없음"}${multi ? ` · 시점 ${d.acquisitions}개 이상 필요` : ""}`;
+    $("#f-multi").hidden = !multi;
+    $("#f-init").hidden = !multi;
+    $("#f-single-images").hidden = multi;
+    $("#f-single-labels").hidden = multi;
+    const proj = $("#f-project");
+    if (proj.value === lastSlug) { lastSlug = domainSlug(d.iri); proj.value = lastSlug; }
   };
   const syncPlan = () => {
     const local = $("#f-target").value.split("#")[1];
@@ -211,11 +259,23 @@ async function newTask() {
 
   $("#task-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const images = [...view.querySelectorAll("input[name=image]:checked")].map((i) => i.value);
+    const multi = isMulti();
+    const images = multi ? [] : [...view.querySelectorAll("input[name=image]:checked")].map((i) => i.value);
     const errBox = $("#f-error");
     errBox.innerHTML = "";
-    if (!images.length) {
-      errBox.innerHTML = `<div class="callout critical">입력 영상을 하나 이상 고르세요.</div>`;
+    const acquisitions = multi ? [...view.querySelectorAll("fieldset.acq")].map((f) => {
+      const v = (n) => f.querySelector(`[name=${n}]`).value;
+      return {
+        acquired_at: v("acquired_at"), image_uris: v("image") ? [v("image")] : [], lidar_uris: v("lidar") ? [v("lidar")] : [],
+        building_source: v("buildings") || null, landcover_source: v("landcover") || null,
+      };
+    }) : [];
+    const problem = !multi ? (images.length ? "" : "입력 영상을 하나 이상 고르세요.")
+      : acquisitions.some((a) => !a.acquired_at || !a.image_uris.length) ? "두 시점 모두 취득 일자와 영상을 고르세요."
+      : acquisitions[0].acquired_at === acquisitions[1].acquired_at ? "두 시점의 취득 일자가 같습니다."
+      : acquisitions[0].acquired_at > acquisitions[1].acquired_at ? "시점 1이 시점 2보다 앞선 일자여야 합니다." : "";
+    if (problem) {
+      errBox.innerHTML = `<div class="callout critical">${esc(problem)}</div>`;
       return;
     }
     const criteria = [...critBox.querySelectorAll(".crit-row")].map((r) => {
@@ -227,10 +287,12 @@ async function newTask() {
       domain: $("#f-domain").value,
       task_type: $("#f-target").value,
       image_uris: images,
-      label_source: $("#f-labels").value || null,
+      acquisitions,
+      label_source: multi ? null : ($("#f-labels").value || null),
       criteria,
       parameters: { epochs: parseInt($("#f-epochs").value, 10) || 20, tile_size: parseInt($("#f-tile").value, 10) },
     };
+    if (multi && $("#f-pre").value) body.parameters.pretrained_uri = $("#f-pre").value;
     const btn = $("#f-submit");
     btn.disabled = true;
     btn.textContent = "요청 중…";
@@ -269,10 +331,16 @@ function curve(history) {
   <div class="legend"><span><i style="background:var(--primary)"></i>검증 IoU</span><span><i style="background:var(--wait)"></i>학습 손실(상대값)</span></div>`;
 }
 
-function criteriaTable(criteria, finished) {
+function conceptLabel(domainIri, local) {
+  const d = catalog && catalog.domains.find((x) => x.iri === domainIri);
+  const c = d && (d.label_concepts || []).find((x) => x.iri.endsWith(`#${local}`));
+  return c ? c.label : local;
+}
+
+function criteriaTable(criteria, finished, domainIri) {
   if (!criteria.length) return `<div class="muted">완료 기준 없음</div>`;
   return `<table><thead><tr><th>지표</th><th>기준</th><th class="num">측정값</th><th>판정</th></tr></thead><tbody>
-    ${criteria.map((c) => `<tr class="${finished && !c.met ? "unmet" : ""}"><td>${esc(METRIC_KO[c.metric] || c.metric)}</td>
+    ${criteria.map((c) => `<tr class="${finished && !c.met ? "unmet" : ""}"><td>${esc(metricLabel(c.metric, domainIri))}</td>
       <td class="mono">${esc(c.operator)} ${fmt(c.threshold, 2)}</td><td class="num">${fmt(c.value)}</td>
       <td>${!finished ? '<span class="muted">대기</span>' : c.met ? '<span class="verdict-ok">충족</span>' : '<span class="verdict-bad">미달</span>'}</td></tr>`).join("")}
   </tbody></table>`;
@@ -288,11 +356,21 @@ async function taskDetail(id) {
     const model = d.artifacts.model;
     const metrics = rep ? rep.metrics : t.metrics;
     const failedStep = d.steps.find((s) => s.critical);
+    const dom = t.domain;
+    const classes = (rep && rep.class_summary) || [];
+    const multiClass = classes.length > 1;
+    const dated = d.steps.flatMap((s) => s.outputs).filter((o) => o.acquired_at && o.asset_type === GAI + "OrthoImage");
+    const dates = [...new Set(dated.map((o) => o.acquired_at))].sort();
+    const lidarDates = [...new Set(d.inputs.filter((a) => a.asset_type === GAI + "LidarPointCloud").map((a) => a.acquired_at))];
+    const inputDates = [...new Set(d.inputs.map((a) => a.acquired_at).filter(Boolean))].sort();
+    const shownDates = dates.length ? dates : inputDates;
+    const metricKeys = multiClass ? ["foreground_F1", "foreground_IoU", "IoU", "F1", "object_F1", "mIoU"] : ["IoU", "F1", "precision", "recall", "object_F1", "mIoU"];
     view.innerHTML = `
       <div class="page-head">
         <div><div class="muted"><a href="#/">현황</a> / 작업</div>
           <h1>${esc(t.domain_label)} · ${esc(t.label)} ${pill(t.status)}</h1>
-          <div class="muted mono">${esc(t.task_id)} · 프로젝트 ${esc(t.project_id)} · 요청 ${time(t.created_at)}</div></div>
+          <div class="muted mono">${esc(t.task_id)} · 프로젝트 ${esc(t.project_id)} · 요청 ${time(t.created_at)}</div>
+          ${shownDates.length > 1 ? `<div class="muted">비교 시점 ${shownDates.map(esc).join(" → ")}${lidarDates.length ? ` · 라이다 ${lidarDates.length}시점` : ""}</div>` : ""}</div>
         <div style="min-width:220px"><div class="muted">전체 진행 ${fmt(d.overall_percent, 0)}%</div>
           <div class="bar wide"><span class="${t.critical ? "fail" : t.status === "Succeeded" ? "done" : "live"}" style="width:${d.overall_percent}%"></span></div></div>
       </div>
@@ -311,26 +389,37 @@ async function taskDetail(id) {
         ${failedStep ? `<div class="callout critical">${esc(failedStep.label)} 단계 실패: ${esc(failedStep.detail)}</div>` : ""}
       </div>
       <div class="grid cols-2" style="margin-top:16px">
-        <div class="card"><h2>완료 기준 판정</h2>${criteriaTable(t.criteria, finished && Object.keys(t.metrics).length > 0)}</div>
+        <div class="card"><h2>완료 기준 판정</h2>${criteriaTable(t.criteria, finished && Object.keys(t.metrics).length > 0, dom)}</div>
         <div class="card"><h2>성능 지표 ${rep ? `<small class="muted">(${rep.split === "test" ? "시험" : "검증"} 집합 ${rep.tiles}장)</small>` : ""}</h2>
-          ${metrics && Object.keys(metrics).length ? `<div class="metrics">${["IoU", "F1", "precision", "recall", "object_F1", "mIoU"].filter((k) => k in metrics).map((k) => `
-            <div class="metric"><div class="k">${esc(METRIC_KO[k] || k)}</div><div class="v">${fmt(metrics[k])}</div></div>`).join("")}</div>
+          ${metrics && Object.keys(metrics).length ? `<div class="metrics">${metricKeys.filter((k) => k in metrics).map((k) => `
+            <div class="metric"><div class="k">${esc(metricLabel(k, dom))}</div><div class="v">${fmt(metrics[k])}</div></div>`).join("")}</div>
             ${rep ? `<div class="muted" style="margin-top:8px">객체: 예측 ${rep.objects.predicted} · 정답 ${rep.objects.reference} · 대응 ${rep.objects.matched} (IoU ≥ ${rep.objects.iou_threshold})</div>` : ""}`
           : `<div class="muted">평가 단계가 끝나면 표시됩니다.</div>`}</div>
       </div>
       ${rep || model ? `<div class="grid cols-2" style="margin-top:16px">
-        ${rep ? `<div class="card preview"><h2>시험 타일 미리보기</h2><img src="${objUrl(rep.preview_uri)}" alt="시험 타일 위에 예측 건물(호박색)과 정답 윤곽(청록색)을 겹친 영상">
-          <div class="legend"><span><i style="background:#e0a030"></i>예측 건물</span><span><i style="background:var(--teal)"></i>정답 윤곽</span></div></div>` : ""}
+        ${rep ? (multiClass ? `<div class="card preview"><h2>변화 지도 미리보기</h2>
+          ${rep.preview_layout === "pair" ? `<div class="muted" style="margin-bottom:6px">타일마다 왼쪽 ${esc((rep.acquisitions || [])[0] || "이전")} · 오른쪽 ${esc((rep.acquisitions || []).slice(-1)[0] || "이후")} + 변화</div>` : ""}
+          <img src="${objUrl(rep.preview_uri)}" alt="시험 타일 위에 예측 변화(색 채움)와 정답 변화(같은 색 윤곽)를 겹친 영상">
+          <div class="legend">${classes.map((c) => `<span><i style="background:${rgb(c.color)}"></i>${esc(c.label)}</span>`).join("")}<span class="muted">채움 = 예측, 윤곽 = 정답</span></div></div>`
+          : `<div class="card preview"><h2>시험 타일 미리보기</h2><img src="${objUrl(rep.preview_uri)}" alt="시험 타일 위에 예측 건물(호박색)과 정답 윤곽(청록색)을 겹친 영상">
+          <div class="legend"><span><i style="background:#e0a030"></i>예측 건물</span><span><i style="background:var(--teal)"></i>정답 윤곽</span></div></div>`) : ""}
         ${model ? `<div class="card chart"><h2>학습 이력</h2>${curve(model.history)}
-          <div class="muted" style="margin-top:6px">최고 검증 IoU ${fmt(model.val_IoU)} (세대 ${model.best_epoch}) · 매개변수 ${(model.parameters / 1e6).toFixed(2)}M · ${esc(model.device)} · ${fmt(model.train_seconds, 0)}초</div></div>` : ""}
+          <div class="muted" style="margin-top:6px">최고 검증 IoU ${fmt(model.val_IoU)} (세대 ${model.best_epoch}) · 매개변수 ${(model.parameters / 1e6).toFixed(2)}M · 입력 ${(model.bands || []).length || 3}밴드 · ${esc(model.device)} · ${fmt(model.train_seconds, 0)}초</div>
+          ${model.pretrained ? `<div class="muted">초기 가중치: ${String(model.pretrained.domain || "").includes("building-extraction") ? "건물 추출 모델" : "사전 학습 모델"} · 옮긴 층 ${model.pretrained.copied + model.pretrained.adapted}/${model.pretrained.total} (첫 층 시점별 분배 ${model.pretrained.adapted})</div>` : ""}</div>` : ""}
       </div>` : ""}
+      ${multiClass ? `<div class="card" style="margin-top:16px"><h2>변화 유형별 결과</h2><div class="table-wrap"><table>
+        <thead><tr><th>유형</th><th class="num">IoU</th><th class="num">F1</th><th class="num">예측 면적(m²)</th><th class="num">정답 면적(m²)</th><th class="num">객체 대응/예측/정답</th></tr></thead>
+        <tbody>${classes.map((c) => `<tr><td><i class="swatch" style="background:${rgb(c.color)}"></i>${esc(c.label)}</td>
+          <td class="num">${fmt(c.IoU)}</td><td class="num">${fmt(c.F1)}</td><td class="num">${fmt(c.predicted_m2, 0)}</td><td class="num">${fmt(c.reference_m2, 0)}</td>
+          <td class="num">${c.objects_matched ?? "—"}/${c.objects_predicted ?? "—"}/${c.objects_reference ?? "—"}</td></tr>`).join("")}</tbody></table></div>
+        <div class="muted" style="margin-top:6px">예측 변화 다각형은 단계별 결과의 predictions.geojson 으로 내려받습니다.</div></div>` : ""}
       <div class="card" style="margin-top:16px"><h2>단계별 결과</h2>
         <div class="table-wrap"><table><thead><tr><th>단계</th><th>상태</th><th>주요 지표</th><th>산출물</th></tr></thead><tbody>
         ${d.steps.map((s) => `<tr class="${s.critical ? "critical" : ""}"><td>${esc(s.label)}</td><td>${pill(s.status)}</td>
           <td class="mono">${Object.entries(s.metrics).slice(0, 5).map(([k, v]) => `${esc(k)} ${fmt(v)}`).join(" · ") || "—"}</td>
           <td class="files">${s.outputs.map((a) => `<a href="${objUrl(a.storage_uri)}" target="_blank" rel="noopener">${shortName(a.storage_uri)}</a>`).join("") || "—"}</td></tr>`).join("")}
         </tbody></table></div>
-        ${d.artifacts.labels ? `<div class="muted" style="margin-top:8px">라벨 품질: 지물 ${d.artifacts.labels.quality.features}개 · 기하 수정 ${d.artifacts.labels.quality.fixed_invalid}개 · 건물 화소 비율 ${fmt(d.artifacts.labels.quality.positive_pixel_ratio)}</div>` : ""}
+        ${d.artifacts.labels ? `<div class="muted" style="margin-top:8px">라벨 품질: 지물 ${d.artifacts.labels.quality.features}개 · 기하 수정 ${d.artifacts.labels.quality.fixed_invalid}개 · 라벨 화소 비율 ${fmt(d.artifacts.labels.quality.positive_pixel_ratio)}${d.artifacts.labels.quality.change_polygons ? ` · 도출 변화 ${Object.entries(d.artifacts.labels.quality.change_polygons).map(([k, v]) => `${esc(conceptLabel(dom, k))} ${v}`).join(", ")}` : ""}</div>` : ""}
         ${d.artifacts.ard ? `<div class="muted">타일 ${d.artifacts.ard.tile_size}px · 학습 ${d.artifacts.ard.split_counts.train} / 검증 ${d.artifacts.ard.split_counts.val} / 시험 ${d.artifacts.ard.split_counts.test}</div>` : ""}
       </div>
       <div class="card" style="margin-top:16px"><details><summary>메시지 기록 ${d.timeline.length}건</summary>
@@ -351,14 +440,16 @@ async function dataView() {
   view.innerHTML = `
     <div class="page-head"><div><h1>원본 자료</h1><div class="muted">데이터·모델 저장소 raw 버킷</div></div></div>
     <div class="card"><h2>자료 올리기</h2>
-      <form id="up-form" class="inline"><input type="file" id="up-file" accept=".tif,.tiff,.geojson,.json" required>
+      <form id="up-form" class="inline"><input type="file" id="up-file" accept=".tif,.tiff,.geojson,.json,.las" required>
       <button class="primary" type="submit">올리기</button></form>
-      <div class="hint muted" style="margin-top:6px">GeoTIFF(좌표 참조 체계 포함, 3밴드 이상) 또는 건물 윤곽 GeoJSON</div></div>
+      <div class="hint muted" style="margin-top:6px">GeoTIFF(좌표 참조 체계 포함, 3밴드 이상), 라이다 LAS, 건물 윤곽·토지피복 GeoJSON. 다시기 분야는 새 작업 화면에서 시점별 취득 일자를 지정합니다.</div></div>
     <div class="card"><h2>영상 ${assets.images.length}건</h2>
       ${assets.images.length ? `<div class="table-wrap"><table><thead><tr><th>주소</th><th>좌표 참조 체계</th><th class="num">해상도(m)</th><th class="num">크기</th></tr></thead><tbody>
       ${assets.images.map((a) => `<tr><td class="mono">${esc(a.uri)}</td><td>${a.error ? `<span class="verdict-bad">${esc(a.error)}</span>` : esc(a.crs)}</td>
         <td class="num">${fmt(a.ground_sample_distance, 2)}</td><td class="num">${a.width ?? "—"}×${a.height ?? "—"}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="empty">영상이 없습니다.</div>`}</div>
+    <div class="card"><h2>라이다 점군 ${(assets.point_clouds || []).length}건</h2>
+      ${(assets.point_clouds || []).length ? `<ul>${assets.point_clouds.map((v) => `<li class="mono">${esc(v.uri)} <span class="muted">(${(v.size / 1048576).toFixed(1)} MB)</span></li>`).join("")}</ul>` : `<div class="empty">라이다 점군이 없습니다.</div>`}</div>
     <div class="card"><h2>참조 벡터 ${assets.vectors.length}건</h2>
       ${assets.vectors.length ? `<ul>${assets.vectors.map((v) => `<li class="mono">${esc(v.uri)} <span class="muted">(${(v.size / 1024).toFixed(0)} KB)</span></li>`).join("")}</ul>` : `<div class="empty">참조 벡터가 없습니다.</div>`}</div>`;
   $("#up-form").addEventListener("submit", async (ev) => {

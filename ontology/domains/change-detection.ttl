@@ -1,15 +1,17 @@
 @prefix gai:  <https://ontology.geoai.local/core#> .
 @prefix dom:  <https://ontology.geoai.local/domain/change-detection#> .
+@prefix job:  <https://ontology.geoai.local/jobs#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 
-# 1년차 분야: 변화탐지(건물·토지)
+# 1년차 분야: 변화탐지(건물·토지). 다시기(두 시점 이상)·다중 센서(영상 + 라이다) 분야.
 
 <https://ontology.geoai.local/domain/change-detection>
     a owl:Ontology ;
-    owl:imports <https://ontology.geoai.local/core> ;
-    owl:versionInfo "0.1.0" .
+    owl:imports <https://ontology.geoai.local/core> , <https://ontology.geoai.local/core/execution> ;
+    owl:versionInfo "0.2.0" .
 
 dom:Domain a gai:Domain ;
     rdfs:label "변화탐지(건물·토지)"@ko .
@@ -18,24 +20,64 @@ dom:Labels a gai:LabelScheme ;
     rdfs:label "변화탐지 라벨 체계"@ko .
 
 # 두 시점 영상 사이의 변화 유형. 대상은 건물과 토지다.
+# 화소값은 IRI 순: 1 건물 멸실, 2 토지 변화, 3 건물 변경, 4 건물 신축 (배경 0 = 변화 없음).
 dom:NewBuilding a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "건물 신축"@ko ;
+    skos:definition "이전 시점에 없고 이후 시점에 있는 건물. 이후 시점 윤곽으로 라벨링한다."@ko ;
     gai:dtCorrespondsTo "Building" .
 
 dom:DemolishedBuilding a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "건물 멸실"@ko ;
+    skos:definition "이전 시점에 있고 이후 시점에 없는 건물. 이전 시점 윤곽으로 라벨링한다."@ko ;
     gai:dtCorrespondsTo "Building" .
 
 dom:ModifiedBuilding a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "건물 변경"@ko ;
-    skos:definition "증축·개축 등으로 윤곽이 바뀐 건물."@ko ;
+    skos:definition "증축·개축 등으로 윤곽이 바뀐 건물. 두 시점 윤곽의 대칭 차(바뀐 부분)로 라벨링한다."@ko ;
     gai:dtCorrespondsTo "Building" .
 
 dom:LandChange a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "토지 변화"@ko ;
-    skos:definition "토지피복 유형이 두 시점 사이에 바뀐 구역."@ko ;
+    skos:definition "토지피복 유형이 두 시점 사이에 바뀐 구역. 건물 변화 구역은 제외한다."@ko ;
     gai:dtCorrespondsTo "LandParcel" .
+
+# 권장 완료 기준 (1년차 시작값. 실제 자료로 측정한 뒤 고친다)
+#   foreground_F1: 변화 여부(변화 유형 무관, 변화 대 무변화) F1
+#   IoU: 변화 유형 4개의 교집합 대 합집합 비율 평균
+dom:Domain gai:defaultCompletionCriterion
+    [ a gai:CompletionCriterion ; gai:metric "foreground_F1" ; gai:operator ">=" ; gai:threshold 0.7 ] ,
+    [ a gai:CompletionCriterion ; gai:metric "IoU" ; gai:operator ">=" ; gai:threshold 0.5 ] .
+
+# -----------------------------------------------------------------------------
+# 분야 전용 실행 작업 유형
+# 전처리(타일 분할), 학습, 성능 검증은 범용 실행 작업(geoai-execution.ttl)을 그대로 쓴다.
+# 범용 도구는 입력 시점·밴드 수를 명세에서 읽으므로 다채널 입력도 처리한다.
+# -----------------------------------------------------------------------------
+
+job:MultiTemporalIngestJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "다시기 영상·라이다 정합"@ko ;
+    rdfs:comment "시점별 항공·위성·드론 영상과 라이다 점군을 받아 모든 시점이 겹치는 범위의 공통 격자(같은 좌표 참조 체계·해상도·원점)로 맞춘다. 시점마다 정사영상 1개와, 라이다가 있으면 정규화 수치 표면 모델(지면 높이를 뺀 지물 높이) 1개를 만든다."@ko ;
+    gai:realizesTask gai:GeoDataProductionTask ;
+    gai:forDomain dom:Domain ;
+    gai:acceptsInputType gai:AerialImage , gai:SatelliteImage , gai:DroneImage ;
+    gai:jobOutputType gai:SpatialProduct ;
+    gai:toolEntrypoint "multitemporal-ingest" ;
+    gai:minAcquisitionDates 2 ;
+    gai:memoryLimit "16Gi" ;
+    gai:requiresAccelerator false .
+
+job:ChangeLabelDeriveJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "변화 라벨 도출"@ko ;
+    rdfs:comment "시점별 건물 윤곽·토지피복 벡터를 대조해 변화 유형(신축·멸실·변경·토지 변화) 다각형을 도출하고 타일마다 라벨 마스크로 래스터화한다. 변화 벡터를 직접 주면(label_source) 그대로 래스터화한다."@ko ;
+    gai:realizesTask gai:LabelingTask ;
+    gai:forDomain dom:Domain ;
+    gai:acceptsInputType gai:AnalysisReadyData ;
+    gai:jobOutputType gai:LabelSet ;
+    gai:toolEntrypoint "change-labels" ;
+    gai:requiresAccelerator false .

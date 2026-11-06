@@ -4,8 +4,14 @@
 지표: 시험 집합(없으면 검증 집합) 기준
   화소 단위  IoU(전경 교집합 대 합집합 비율), mIoU(배경 포함 평균), F1, precision(정밀도), recall(재현율)
   객체 단위  예측·정답 연결 요소를 IoU 0.5 이상으로 1:1 대응시켜 object_precision, object_recall, object_F1
+  전경 개념이 둘 이상이면(변화탐지 등) 추가로
+  전경 여부  foreground_IoU, foreground_F1, foreground_precision, foreground_recall (개념 무관, 전경 대 배경)
+  개념별    class_summary: 개념마다 IoU, F1, 예측·정답 면적(m²), 객체 수
 산출: 성능 검증 보고(gai:EvaluationReport) report.json, 결과 산출물(gai:ResultProduct) predictions.geojson,
-      미리보기 preview.png(예측: 호박색 채움, 정답: 청록색 윤곽)
+      미리보기 preview.png
+      - 단일 개념: 예측 호박색 채움, 정답 청록색 윤곽
+      - 다개념: 개념 색 채움(예측)과 같은 색 윤곽(정답). 빨간색은 쓰지 않는다(운영 콘솔의 위험 표시 전용).
+      - 다시기: 타일마다 [첫 시점 | 마지막 시점 + 예측·정답] 두 칸
 매개변수: min_object_m2(객체 최소 면적, 8), preview_tiles(6)
 """
 
@@ -32,6 +38,14 @@ GAI = "https://ontology.geoai.local/core#"
 OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt, "<": operator.lt, "==": operator.eq}
 PRED_RGB = np.array([224, 160, 48], dtype=np.float32)  # 호박색
 GT_RGB = np.array([32, 178, 170], dtype=np.uint8)  # 청록색
+# 개념 화소값 1, 2, ... 순 색. 채도를 낮춘 호박·하늘·보라·초록·갈색·청회. 빨간 계열은 넣지 않는다.
+PALETTE = np.array(
+    [[224, 160, 48], [91, 143, 199], [140, 120, 196], [64, 168, 120], [176, 128, 88], [96, 160, 168]], dtype=np.uint8
+)
+
+
+def class_color(value: int) -> list[int]:
+    return PALETTE[(value - 1) % len(PALETTE)].tolist()
 
 
 def objects(mask: np.ndarray, transform: Affine, min_px: int) -> list:
@@ -70,21 +84,49 @@ def boundary(mask: np.ndarray) -> np.ndarray:
     return m & ~inner
 
 
-def render_preview(images: np.ndarray, preds: np.ndarray, gts: np.ndarray, cols: int = 3) -> np.ndarray:
-    n = len(images)
-    rows = -(-n // cols)
-    t = images.shape[-1]
-    gap = 6
-    canvas = np.full((3, rows * t + (rows - 1) * gap, cols * t + (cols - 1) * gap), 245, dtype=np.uint8)
-    for k in range(n):
-        tile = images[k].astype(np.float32)
-        fg = preds[k] > 0
+def _overlay(image: np.ndarray, pred: np.ndarray, gt: np.ndarray, n_cls: int) -> np.ndarray:
+    tile = image.astype(np.float32)
+    if n_cls <= 2:
+        fg = pred > 0
         tile[:, fg] = tile[:, fg] * 0.55 + PRED_RGB[:, None] * 0.45
         tile = tile.astype(np.uint8)
-        edge = boundary(gts[k] > 0)
-        tile[:, edge] = GT_RGB[:, None]
+        tile[:, boundary(gt > 0)] = GT_RGB[:, None]
+        return tile
+    for v in range(1, n_cls):
+        m = pred == v
+        tile[:, m] = tile[:, m] * 0.5 + PALETTE[(v - 1) % len(PALETTE)].astype(np.float32)[:, None] * 0.5
+    tile = tile.astype(np.uint8)
+    for v in range(1, n_cls):
+        tile[:, boundary(gt == v)] = PALETTE[(v - 1) % len(PALETTE)][:, None]
+    return tile
+
+
+def render_preview(
+    images: np.ndarray,
+    preds: np.ndarray,
+    gts: np.ndarray,
+    cols: int = 3,
+    n_cls: int = 2,
+    reference: np.ndarray | None = None,
+) -> np.ndarray:
+    """images: (N, 3, T, T) 표시 영상. reference 가 있으면(다시기) 타일마다 [비교 시점 | 표시 시점+겹침] 두 칸."""
+    panels = []
+    for k in range(len(images)):
+        over = _overlay(images[k], preds[k], gts[k], n_cls)
+        if reference is not None:
+            gap = np.full((3, over.shape[1], 3), 245, dtype=np.uint8)
+            over = np.concatenate([reference[k].astype(np.uint8), gap, over], axis=2)
+        panels.append(over)
+    if reference is not None:
+        cols = 2
+    n = len(panels)
+    rows = -(-n // cols)
+    th, tw = panels[0].shape[1:]
+    gap = 6
+    canvas = np.full((3, rows * th + (rows - 1) * gap, cols * tw + (cols - 1) * gap), 245, dtype=np.uint8)
+    for k, tile in enumerate(panels):
         r, c = divmod(k, cols)
-        canvas[:, r * (t + gap) : r * (t + gap) + t, c * (t + gap) : c * (t + gap) + t] = tile
+        canvas[:, r * (th + gap) : r * (th + gap) + th, c * (tw + gap) : c * (tw + gap) + tw] = tile
     return canvas
 
 
@@ -107,6 +149,10 @@ def run(ctx: ToolContext) -> ToolOutput:
         raise ToolError("empty_split", "시험·검증 집합이 비었습니다.")
 
     device = pick_device()
+    if int(arch["in_channels"]) != int(tiles.images.shape[1]):
+        raise ToolError(
+            "band_mismatch", f"모델 입력 밴드 {arch['in_channels']}, 분석 준비 데이터 밴드 {tiles.images.shape[1]}"
+        )
     model = UNet(in_channels=arch["in_channels"], num_classes=n_cls, base=arch["base_channels"], depth=arch["depth"])
     state = torch.load(io.BytesIO(ctx.store.get_bytes(card["weights_uri"])), map_location="cpu", weights_only=True)
     model.load_state_dict(state)
@@ -122,12 +168,36 @@ def run(ctx: ToolContext) -> ToolOutput:
     pred = np.concatenate(preds)
     pred[~tiles.valid[idx]] = 0
     gt = tiles.masks[idx]
-    metrics = pixel_metrics(confusion(pred, gt, tiles.valid[idx], n_cls))
+    cm = confusion(pred, gt, tiles.valid[idx], n_cls)
+    metrics = pixel_metrics(cm)
+    gsd = float(tiles.manifest["ground_sample_distance"])
+    class_summary = []
+    if n_cls > 2:
+        fg = pixel_metrics(confusion((pred > 0).astype(np.uint8), (gt > 0).astype(np.uint8), tiles.valid[idx], 2))
+        metrics.update({f"foreground_{k}": fg[k] for k in ("IoU", "F1", "precision", "recall")})
+    tp_c = np.diag(cm).astype(np.float64)
+    for cls in labels["classes"][1:]:
+        v = int(cls["value"])
+        fp, fn = cm[:, v].sum() - tp_c[v], cm[v, :].sum() - tp_c[v]
+        prec, rec = tp_c[v] / max(tp_c[v] + fp, 1), tp_c[v] / max(tp_c[v] + fn, 1)
+        class_summary.append(
+            {
+                "value": v,
+                "label": cls["label"],
+                "iri": cls.get("iri"),
+                "color": class_color(v),
+                # 시험 집합에 정답·예측 모두 없는 유형은 판정 불가(None)
+                "IoU": round(float(tp_c[v] / (tp_c[v] + fp + fn)), 5) if tp_c[v] + fp + fn else None,
+                "F1": round(float(2 * prec * rec / max(prec + rec, 1e-12)), 5) if tp_c[v] + fp + fn else None,
+                "predicted_m2": round(float(cm[:, v].sum()) * gsd * gsd, 1),
+                "reference_m2": round(float(cm[v, :].sum()) * gsd * gsd, 1),
+            }
+        )
 
     ctx.progress(65, "객체 단위 대응·다각형 추출")
-    gsd = float(tiles.manifest["ground_sample_distance"])
     min_px = max(1, int(ctx.param("min_object_m2", 8.0) / (gsd * gsd)))
     tp = n_pred = n_gt = 0
+    per_class = {int(c["value"]): [0, 0, 0] for c in labels["classes"][1:]}  # 대응, 예측, 정답
     features = []
     for k, tid in enumerate(idx):
         transform = Affine(*tiles.manifest["tiles"][int(tid)]["transform"])
@@ -135,14 +205,23 @@ def run(ctx: ToolContext) -> ToolOutput:
             v = int(cls["value"])
             p_obj = objects(pred[k] == v, transform, min_px)
             g_obj = objects(gt[k] == v, transform, min_px)
-            tp += match_objects(p_obj, g_obj)
+            matched = match_objects(p_obj, g_obj)
+            tp += matched
             n_pred += len(p_obj)
             n_gt += len(g_obj)
+            per_class[v][0] += matched
+            per_class[v][1] += len(p_obj)
+            per_class[v][2] += len(g_obj)
             for p in p_obj:
                 features.append(
                     {
                         "type": "Feature",
-                        "properties": {"class": cls["label"], "tile": int(tid), "area_m2": round(p.area, 1)},
+                        "properties": {
+                            "class": cls["label"],
+                            "concept": (cls.get("iri") or "").rsplit("#", 1)[-1],
+                            "tile": int(tid),
+                            "area_m2": round(p.area, 1),
+                        },
                         "geometry": mapping(p.simplify(gsd, preserve_topology=True)),
                     }
                 )
@@ -158,8 +237,21 @@ def run(ctx: ToolContext) -> ToolOutput:
     metrics = {k: round(float(v), 5) for k, v in metrics.items()}
 
     ctx.progress(85, "보고서·미리보기 저장")
+    for row in class_summary:
+        row["objects_matched"], row["objects_predicted"], row["objects_reference"] = per_class[row["value"]]
     k_prev = min(len(idx), ctx.param("preview_tiles", 6))
-    canvas = render_preview(tiles.images[idx[:k_prev]], pred[:k_prev], gt[:k_prev])
+    # 정답이 있는 타일을 먼저 보여 준다(변화는 드물다).
+    order = sorted(range(len(idx)), key=lambda k: -int((gt[k] > 0).sum()))[:k_prev]
+    disp = tiles.manifest.get("display_bands") or [0, 1, 2]
+    ref_bands = tiles.manifest.get("reference_display_bands")
+    sel = idx[order]
+    canvas = render_preview(
+        tiles.images[sel][:, disp],
+        pred[order],
+        gt[order],
+        n_cls=n_cls,
+        reference=tiles.images[sel][:, ref_bands] if ref_bands else None,
+    )
     png = ctx.workdir / "preview.png"
     with rasterio.open(
         png, "w", driver="PNG", width=canvas.shape[2], height=canvas.shape[1], count=3, dtype="uint8"
@@ -198,6 +290,9 @@ def run(ctx: ToolContext) -> ToolOutput:
             "min_object_m2": min_px * gsd * gsd,
         },
         "metrics": metrics,
+        "class_summary": class_summary,
+        "acquisitions": tiles.manifest.get("acquisitions", []),
+        "preview_layout": "pair" if ref_bands else "single",
         "completion_criteria": criteria,
         "preview_uri": preview_uri,
         "predictions_uri": pred_uri,
@@ -205,6 +300,7 @@ def run(ctx: ToolContext) -> ToolOutput:
             "val_IoU": card.get("val_IoU"),
             "best_epoch": card.get("best_epoch"),
             "device": card.get("device"),
+            "pretrained": card.get("pretrained"),
         },
     }
     report_uri = ctx.out("evaluation", "report.json")

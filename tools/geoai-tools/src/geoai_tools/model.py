@@ -74,16 +74,66 @@ def pixel_metrics(cm: np.ndarray) -> dict[str, float]:
     precision = tp / np.maximum(tp + fp, 1)
     recall = tp / np.maximum(tp + fn, 1)
     f1 = 2 * precision * recall / np.maximum(precision + recall, 1e-12)
-    fg = slice(1, None)
+    # 정답에도 예측에도 없는 개념(시험 집합에 그 변화 유형이 없음)은 평균에서 뺀다. 0으로 넣으면 평균이 왜곡된다.
+    present = (tp + fp + fn) > 0
+    fg = present.copy()
+    fg[0] = False
+    if not fg.any():
+        fg[1:] = True
+
+    def mean(v: np.ndarray, m: np.ndarray) -> float:
+        return float(v[m].mean())
+
     return {
-        "IoU": float(iou[fg].mean()),
-        "mIoU": float(iou.mean()),
-        "F1": float(f1[fg].mean()),
-        "precision": float(precision[fg].mean()),
-        "recall": float(recall[fg].mean()),
+        "IoU": mean(iou, fg),
+        "mIoU": mean(iou, present | (np.arange(len(tp)) == 0)),
+        "F1": mean(f1, fg),
+        "precision": mean(precision, fg),
+        "recall": mean(recall, fg),
         "pixel_accuracy": float(tp.sum() / max(cm.sum(), 1)),
     }
 
 
 def pick_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+FIRST_CONV = "down.0.0.weight"
+
+
+def transfer_weights(model: nn.Module, state: dict, rgb_groups: list[list[int]]) -> dict:
+    """다른 분야 모델(예: 건물 추출) 가중치를 옮겨 심는다(전이 학습).
+
+    - 모양이 같은 텐서는 그대로 복사한다.
+    - 첫 합성곱이 3채널(RGB)이고 새 모델이 다채널이면, 시점별 RGB 묶음(rgb_groups)마다 원래 가중치를
+      묶음 수로 나눠 넣고 나머지 채널(지물 높이 등)은 0에서 시작한다. 같은 영상 특징을 시점마다 쓰게 된다.
+    - 분류 수가 다른 출력층 등 나머지는 새로 학습한다.
+    """
+    own = model.state_dict()
+    copied, adapted, skipped = 0, 0, []
+    for key, value in state.items():
+        if key not in own:
+            skipped.append(key)
+            continue
+        target = own[key]
+        if target.shape == value.shape:
+            own[key] = value.to(target.dtype)
+            copied += 1
+        elif key == FIRST_CONV and value.shape[1] == 3 and rgb_groups and target.shape[0] == value.shape[0]:
+            w = torch.zeros_like(target)
+            for group in rgb_groups:
+                w[:, group] = value / len(rgb_groups)
+            own[key] = w
+            adapted += 1
+        else:
+            skipped.append(key)
+    model.load_state_dict(own)
+    return {"copied": copied, "adapted": adapted, "skipped": skipped, "total": len(own)}
+
+
+def class_weights(masks: np.ndarray, num_classes: int) -> torch.Tensor:
+    """교차 엔트로피 개념 가중치: 빈도의 제곱근 역수, 평균 1로 맞춘다. 드문 변화 유형을 보완한다."""
+    counts = np.bincount(masks.ravel(), minlength=num_classes).astype(np.float64)
+    w = 1.0 / np.sqrt(np.maximum(counts, 1.0) / max(counts.sum(), 1.0))
+    w = w / w.mean()
+    return torch.tensor(w, dtype=torch.float32)

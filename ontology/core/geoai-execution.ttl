@@ -17,7 +17,7 @@
 <https://ontology.geoai.local/core/execution>
     a owl:Ontology ;
     owl:imports <https://ontology.geoai.local/core> ;
-    owl:versionInfo "0.1.0" ;
+    owl:versionInfo "0.2.0" ;
     dct:title "GeoAI 실행 계층 확장"@ko .
 
 # -----------------------------------------------------------------------------
@@ -43,6 +43,18 @@ gai:toolEntrypoint a owl:AnnotationProperty ;
 gai:requiresAccelerator a owl:AnnotationProperty ;
     rdfs:label "그래픽 처리 장치 필요"@ko ;
     rdfs:comment "참이면 작업 실행 엔진이 그래픽 처리 장치 노드에 배치한다. 장치가 없으면 중앙 처리 장치로 실행한다."@ko .
+
+gai:forDomain a owl:AnnotationProperty ;
+    rdfs:label "전용 분야"@ko ;
+    rdfs:comment "실행 작업이 특정 분야(gai:Domain 개체) 전용임을 밝힌다. 여러 값이면 그중 하나. 전용 실행 작업은 같은 작업 유형의 범용 실행 작업보다 먼저 고른다. 없으면 모든 분야에 쓴다. 분야 전용 실행 작업은 분야 온톨로지 파일에 선언한다."@ko .
+
+gai:minAcquisitionDates a owl:AnnotationProperty ;
+    rdfs:label "최소 취득 시점 수"@ko ;
+    rdfs:comment "입력 자산의 서로 다른 취득 일자(gai:temporalExtent) 개수 하한. 다시기 처리(변화탐지 등)에 쓴다. 전문 에이전트가 접수 전에 확인한다."@ko .
+
+gai:memoryLimit a owl:AnnotationProperty ;
+    rdfs:label "메모리 상한"@ko ;
+    rdfs:comment "실행 작업 컨테이너의 메모리 요청·상한(쿠버네티스 수량 표기, 예: 16Gi). 없으면 작업 실행기 기본값(8Gi)."@ko .
 
 gai:defaultCompletionCriterion a owl:AnnotationProperty ;
     rdfs:label "권장 완료 기준"@ko ;
