@@ -134,3 +134,30 @@ def test_k8s_job_memory_from_ontology():
     m = build_k8s_job(s, namespace="n", image="i", s3_secret="s", s3_endpoint="e")
     res = m["spec"]["template"]["spec"]["containers"][0]["resources"]
     assert res["requests"]["memory"] == res["limits"]["memory"] == "16Gi"
+
+
+RD = "https://ontology.geoai.local/domain/road-extraction#"
+
+
+def test_road_extraction_domain(onto):
+    # 선형 객체 분야: 라벨 개념의 기하 유형이 선(sf:LineString)
+    [c] = onto.label_concepts(RD + "Domain")
+    assert (c.label, c.value, c.geometry, c.linear) == ("도로", 1, "LineString", True)
+    assert onto.label_geometry(RD + "Domain") == "LineString"
+    assert onto.label_geometry(BLD + "Domain") == "Polygon"
+    # 라벨링·평가만 분야 전용, 나머지는 범용
+    ard = [str(GAI.AnalysisReadyData)]
+    assert onto.job_for(str(GAI.LabelingTask), ard, RD + "Domain").entrypoint == "road-labels"
+    ev = onto.job_for(str(GAI.EvaluationTask), [str(GAI.Model), str(GAI.LabelSet)], RD + "Domain")
+    assert (ev.entrypoint, ev.accelerator) == ("road-evaluate", True)
+    assert onto.job_for(str(GAI.EvaluationTask), [str(GAI.Model), str(GAI.LabelSet)], BLD + "Domain").entrypoint == (
+        "segmentation-evaluate"
+    )
+    assert onto.job_for(str(GAI.GeoDataProductionTask), [str(GAI.AerialImage)], RD + "Domain").entrypoint == (
+        "ortho-ingest"
+    )
+    assert onto.job_for(str(GAI.ModelTrainingTask), ard + [str(GAI.LabelSet)], RD + "Domain").entrypoint == (
+        "segmentation-train"
+    )
+    assert onto.acquisitions_required(RD + "Domain") == 1
+    assert {c["metric"] for c in onto.default_criteria(RD + "Domain")} == {"IoU", "APLS"}

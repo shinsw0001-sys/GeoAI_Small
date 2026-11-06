@@ -24,6 +24,7 @@ from .messages import TaskRequestPayload, Violation
 
 GAI = Namespace("https://ontology.geoai.local/core#")
 TIME = Namespace("http://www.w3.org/2006/time#")
+SF = Namespace("http://www.opengis.net/ont/sf#")
 CORE_ONTOLOGY_IRI = URIRef("https://ontology.geoai.local/core")
 REQUEST_NS = Namespace("urn:geoai:request:")
 
@@ -51,6 +52,11 @@ class LabelConcept:
     iri: str
     label: str
     value: int
+    geometry: str = "Polygon"  # gai:labelGeometryType 의 지역명(Polygon, LineString, Point). 없으면 면
+
+    @property
+    def linear(self) -> bool:
+        return self.geometry == "LineString"
 
 
 @dataclass(frozen=True)
@@ -240,8 +246,14 @@ class OntologyRegistry:
                 ),
                 iri.rsplit("#", 1)[-1],
             )
-            out.append(LabelConcept(iri=iri, label=label, value=idx))
+            geom = self.graph.value(URIRef(iri), GAI.labelGeometryType)
+            geometry = str(geom).removeprefix(str(SF)) if geom is not None else "Polygon"
+            out.append(LabelConcept(iri=iri, label=label, value=idx, geometry=geometry))
         return out
+
+    def label_geometry(self, domain: str) -> str:
+        """분야 라벨 기하: 개념 중 하나라도 선이면 LineString, 아니면 Polygon. 운영 콘솔이 화면을 고를 때 쓴다."""
+        return "LineString" if any(c.linear for c in self.label_concepts(domain)) else "Polygon"
 
     # ------------------------------------------------------------------
     # 형상 제약 검증

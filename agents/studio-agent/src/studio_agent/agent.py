@@ -81,8 +81,10 @@ class StudioAgent(BaseAgent):
                     "label": self.ontology.label(d),
                     "default_criteria": self.ontology.default_criteria(d),
                     "acquisitions": self.ontology.acquisitions_required(d),
+                    "label_geometry": self.ontology.label_geometry(d),
                     "label_concepts": [
-                        {"iri": c.iri, "label": c.label, "value": c.value} for c in self.ontology.label_concepts(d)
+                        {"iri": c.iri, "label": c.label, "value": c.value, "geometry": c.geometry}
+                        for c in self.ontology.label_concepts(d)
                     ],
                 }
                 for d in self.ontology.domains()

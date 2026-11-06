@@ -159,3 +159,24 @@ def test_change_request_builds_dated_inputs(client):
     assert [p["uri"] for p in assets["point_clouds"]] == ["s3://raw/uploads/t1.las"]
     assert client.get("/api/models").json() == {"models": []}
     assert client.post("/api/tasks", json={"domain": CD, "task_type": GAI + "PreprocessingTask"}).status_code == 422
+
+
+RD = "https://ontology.geoai.local/domain/road-extraction#Domain"
+
+
+def test_road_domain_catalog_and_preset(client):
+    from geoai_common.objectstore import put_json
+
+    cat = client.get("/api/catalog").json()
+    road = next(d for d in cat["domains"] if d["iri"] == RD)
+    # 화면은 온톨로지의 라벨 기하(선)로 도로 입력 안내·도로망 결과 화면을 고른다
+    assert road["label_geometry"] == "LineString" and road["label_concepts"][0]["geometry"] == "LineString"
+    assert {c["metric"] for c in road["default_criteria"]} == {"IoU", "APLS"}
+    assert next(d for d in cat["domains"] if d["iri"] == BUILDING)["label_geometry"] == "Polygon"
+    objects = client.app.state.deps.objects
+    put_json(objects, "s3://raw/sample-road/sample.json",
+             {"domain": RD, "image": "s3://raw/site/a.tif", "label_source": "s3://raw/site/b.geojson"})  # fmt: skip
+    presets = client.get("/api/assets").json()["presets"]
+    assert [p["domain"] for p in presets] == [RD]
+    js = client.get("/static/app.js").text
+    assert "road-network-evaluation" in js and "도로망 위상 평가" in js

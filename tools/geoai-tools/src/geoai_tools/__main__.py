@@ -6,6 +6,8 @@ geoai-tools sample [--size 2048] [--prefix s3://raw/sample]
                                                     합성 항공 영상·건물 윤곽을 데이터·모델 저장소에 넣기
 geoai-tools sample --kind change [--size 1024] [--prefix s3://raw/sample-change]
                                                     합성 두 시점 영상·라이다·건물 윤곽·토지피복을 넣기
+geoai-tools sample --kind road [--size 1024] [--prefix s3://raw/sample-road]
+                                                    합성 항공 영상·도로 중심선(폭 속성)을 넣기
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from . import ENTRYPOINTS
 from .runtime import run_job
 from .sample import CRS, GSD, generate
 from .sample_change import generate_change
+from .sample_road import generate_road
 
 
 def _load_spec(args: argparse.Namespace, store) -> JobSpec:  # type: ignore[no-untyped-def]
@@ -72,6 +75,27 @@ def seed_change_sample(store, prefix: str = "s3://raw/sample-change", size: int 
     return meta
 
 
+def seed_road_sample(store, prefix: str = "s3://raw/sample-road", size: int = 1024, seed: int = 21) -> dict:  # type: ignore[no-untyped-def]
+    """합성 도로 자료(영상 + 도로 중심선)를 올리고 등록 정보(sample.json)를 쓴다. 운영 콘솔이 입력을 미리 고른다."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tif, geojson = generate_road(tmp, size=size, seed=seed)
+        image_uri = join_uri(prefix, tif.name)
+        vector_uri = join_uri(prefix, geojson.name)
+        store.put_file(image_uri, tif)
+        store.put_file(vector_uri, geojson)
+    meta = {
+        "kind": "road-extraction",
+        "domain": "https://ontology.geoai.local/domain/road-extraction#Domain",
+        "image": image_uri,
+        "label_source": vector_uri,
+        "crs": CRS,
+        "ground_sample_distance": GSD,
+        "size_px": size,
+    }
+    put_json(store, join_uri(prefix, "sample.json"), meta)
+    return meta
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     parser = argparse.ArgumentParser(prog="geoai-tools")
@@ -84,12 +108,15 @@ def main(argv: list[str] | None = None) -> int:
     sample.add_argument("--prefix", default="s3://raw/sample")
     sample.add_argument("--size", type=int, default=2048)
     sample.add_argument("--seed", type=int, default=None)
-    sample.add_argument("--kind", choices=["building", "change"], default="building")
+    sample.add_argument("--kind", choices=["building", "change", "road"], default="building")
     args = parser.parse_args(argv)
 
     store = object_store_from_env()
     if args.command == "sample":
-        if args.kind == "change":
+        if args.kind == "road":
+            prefix = args.prefix if args.prefix != "s3://raw/sample" else "s3://raw/sample-road"
+            meta = seed_road_sample(store, prefix, args.size if args.size != 2048 else 1024, args.seed or 21)
+        elif args.kind == "change":
             prefix = args.prefix if args.prefix != "s3://raw/sample" else "s3://raw/sample-change"
             meta = seed_change_sample(store, prefix, args.size if args.size != 2048 else 1024, args.seed or 11)
         else:

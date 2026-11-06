@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import json
 import operator
+from dataclasses import dataclass
 
 import numpy as np
 import rasterio
@@ -30,7 +31,7 @@ from rasterio import Affine
 from rasterio.features import shapes
 from shapely.geometry import mapping, shape
 
-from .data import load_labelled
+from .data import TileSet, load_labelled
 from .model import UNet, confusion, normalize, pick_device, pixel_metrics
 from .runtime import ToolContext, ToolError, ToolOutput
 
@@ -130,7 +131,23 @@ def render_preview(
     return canvas
 
 
-def run(ctx: ToolContext) -> ToolOutput:
+@dataclass
+class Inference:
+    """시험 집합 추론 결과. 분야 전용 성능 검증(도로망 등)도 이 결과에서 시작한다."""
+
+    model_asset: DataAssetRef
+    labels_asset: DataAssetRef
+    card: dict
+    labels: dict
+    tiles: TileSet
+    split: str
+    idx: np.ndarray
+    pred: np.ndarray
+    n_cls: int
+
+
+def infer_split(ctx: ToolContext) -> Inference:
+    """입력 확인 → 모델·라벨 세트 읽기 → 시험(없으면 검증) 집합 추론."""
     model_asset = next((a for a in ctx.spec.inputs if str(a.asset_type).endswith("#Model")), None)
     labels_asset = next((a for a in ctx.spec.inputs if str(a.asset_type).endswith("LabelSet")), None)
     if model_asset is None or labels_asset is None:
@@ -167,6 +184,37 @@ def run(ctx: ToolContext) -> ToolOutput:
             ctx.progress(10 + 50 * min(i + 8, len(idx)) / len(idx), f"추론 {min(i + 8, len(idx))}/{len(idx)}")
     pred = np.concatenate(preds)
     pred[~tiles.valid[idx]] = 0
+    return Inference(model_asset, labels_asset, card, labels, tiles, split, idx, pred, n_cls)
+
+
+def judge(ctx: ToolContext, metrics: dict) -> list[dict]:
+    """요청 완료 기준을 지표와 대조한다(보고서 기록용. 최종 판정은 Studio Agent가 한다)."""
+    return [
+        {
+            **c,
+            "value": metrics.get(c["metric"]),
+            "met": metrics.get(c["metric"]) is not None
+            and OPS.get(c["operator"], operator.ge)(metrics[c["metric"]], c["threshold"]),
+        }
+        for c in ctx.spec.completion_criteria
+    ]
+
+
+def save_png(ctx: ToolContext, canvas: np.ndarray, name: str = "preview.png") -> str:
+    png = ctx.workdir / name
+    with rasterio.open(
+        png, "w", driver="PNG", width=canvas.shape[2], height=canvas.shape[1], count=3, dtype="uint8"
+    ) as dst:
+        dst.write(canvas)
+    uri = ctx.out("evaluation", name)
+    ctx.store.put_file(uri, png)
+    return uri
+
+
+def run(ctx: ToolContext) -> ToolOutput:
+    inf = infer_split(ctx)
+    model_asset, labels_asset, card, labels, tiles = inf.model_asset, inf.labels_asset, inf.card, inf.labels, inf.tiles
+    split, idx, pred, n_cls = inf.split, inf.idx, inf.pred, inf.n_cls
     gt = tiles.masks[idx]
     cm = confusion(pred, gt, tiles.valid[idx], n_cls)
     metrics = pixel_metrics(cm)
@@ -252,13 +300,7 @@ def run(ctx: ToolContext) -> ToolOutput:
         n_cls=n_cls,
         reference=tiles.images[sel][:, ref_bands] if ref_bands else None,
     )
-    png = ctx.workdir / "preview.png"
-    with rasterio.open(
-        png, "w", driver="PNG", width=canvas.shape[2], height=canvas.shape[1], count=3, dtype="uint8"
-    ) as dst:
-        dst.write(canvas)
-    preview_uri = ctx.out("evaluation", "preview.png")
-    ctx.store.put_file(preview_uri, png)
+    preview_uri = save_png(ctx, canvas)
 
     crs = tiles.manifest["crs"]
     epsg = crs.split(":")[-1] if crs.upper().startswith("EPSG:") else None
@@ -268,14 +310,7 @@ def run(ctx: ToolContext) -> ToolOutput:
     pred_uri = ctx.out("evaluation", "predictions.geojson")
     ctx.store.put_bytes(pred_uri, json.dumps(geojson, ensure_ascii=False).encode())
 
-    criteria = [
-        {
-            **c,
-            "value": metrics.get(c["metric"]),
-            "met": c["metric"] in metrics and OPS.get(c["operator"], operator.ge)(metrics[c["metric"]], c["threshold"]),
-        }
-        for c in ctx.spec.completion_criteria
-    ]
+    criteria = judge(ctx, metrics)
     report = {
         "kind": "segmentation-evaluation",
         "model": model_asset.storage_uri,

@@ -17,7 +17,7 @@
 <https://ontology.geoai.local/core/execution>
     a owl:Ontology ;
     owl:imports <https://ontology.geoai.local/core> ;
-    owl:versionInfo "0.2.0" ;
+    owl:versionInfo "0.3.0" ;
     dct:title "GeoAI 실행 계층 확장"@ko .
 
 # -----------------------------------------------------------------------------
@@ -55,6 +55,10 @@ gai:minAcquisitionDates a owl:AnnotationProperty ;
 gai:memoryLimit a owl:AnnotationProperty ;
     rdfs:label "메모리 상한"@ko ;
     rdfs:comment "실행 작업 컨테이너의 메모리 요청·상한(쿠버네티스 수량 표기, 예: 16Gi). 없으면 작업 실행기 기본값(8Gi)."@ko .
+
+gai:labelGeometryType a owl:AnnotationProperty ;
+    rdfs:label "라벨 기하 유형"@ko ;
+    rdfs:comment "라벨 개념(skos:Concept)을 라벨링하는 기하 유형. GeoSPARQL 단순 지물 어휘(sf:Polygon, sf:LineString, sf:Point)로 준다. 없으면 면(sf:Polygon). 선(sf:LineString)이면 라벨링·평가에 선형 객체 처리(폭 확장 래스터화, 중심선·도로망 위상 지표)를 쓴다."@ko .
 
 gai:defaultCompletionCriterion a owl:AnnotationProperty ;
     rdfs:label "권장 완료 기준"@ko ;
