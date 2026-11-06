@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ops-console"
+version = "0.1.0"
+description = "GeoAI 운영 콘솔: 작업 요청, 진행·결과 조회, 위험 알림. 1년차에는 Studio Agent의 상위 발신자(서비스·사용자 계층 대행)다."
+requires-python = ">=3.12"
+dependencies = [
+    "geoai-common[s3]==0.1.0",
+    "fastapi==0.162.0",
+    "uvicorn==0.38.0",
+    "httpx==0.28.1",
+    "python-multipart==0.0.33",
+    "rasterio==1.5.2",
+]
+
+[project.optional-dependencies]
+# 개발용 일체형 실행(geoai-dev): Studio Agent·전문 에이전트·처리 도구를 한 장비에서 띄운다.
+dev = ["studio-agent==0.1.0", "specialist-agents==0.1.0", "geoai-tools==0.1.0"]
+
+[project.scripts]
+ops-console = "ops_console.__main__:main"
+geoai-dev = "ops_console.devstack:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ops_console"]

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "geoai-common"
 version = "0.1.0"
-description = "GeoAI 공통 라이브러리: 메시지 규약, 온톨로지 레지스트리, 메시지 버스, 프로젝트 상태 저장소, 에이전트 기반 클래스"
+description = "GeoAI 공통 라이브러리: 메시지 규약, 온톨로지 레지스트리, 메시지 버스, 프로젝트 상태 저장소, 데이터·모델 저장소, 작업 실행기, 에이전트 기반 클래스"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic==2.14.3",
@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 nats = ["nats-py==2.16.0"]
 postgres = ["psycopg[binary,pool]==3.3.8"]
+s3 = ["boto3==1.43.125"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/geoai_common"]

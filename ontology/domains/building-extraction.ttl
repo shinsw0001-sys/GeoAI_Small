@@ -22,3 +22,9 @@ dom:Building a skos:Concept ;
     skos:prefLabel "건물"@ko ;
     skos:definition "지붕 윤곽으로 구분되는 건축물 객체. 다각형으로 라벨링한다."@ko ;
     gai:dtCorrespondsTo "Building" .
+
+# 권장 완료 기준 (요청에 완료 기준이 없을 때 Studio Agent가 쓴다).
+# 기준값은 1년차 시작값이며, 실제 데이터로 측정한 뒤 고친다.
+dom:Domain gai:defaultCompletionCriterion
+    [ a gai:CompletionCriterion ; gai:metric "IoU" ; gai:operator ">=" ; gai:threshold 0.6 ] ,
+    [ a gai:CompletionCriterion ; gai:metric "F1" ; gai:operator ">=" ; gai:threshold 0.75 ] .

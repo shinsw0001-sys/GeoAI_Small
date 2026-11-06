@@ -11,6 +11,8 @@
 | 필수 선언 | `owl:imports <https://ontology.geoai.local/core>`, `gai:Domain` 개체 1개 |
 | 선택 선언 | 분야 전용 데이터 자산 하위 클래스, 라벨 체계(`gai:LabelScheme` + `skos:Concept`), 분야 전용 작업 하위 클래스 |
 | 작업 하위 클래스 | 반드시 `gai:requiresInputType`, `gai:producesOutputType`, `gai:handledBy`를 선언한다. Studio Agent의 계획기가 이 세 속성으로 하위 작업을 구성한다. |
+| 권장 완료 기준 | `gai:Domain` 개체에 `gai:defaultCompletionCriterion`으로 붙인다(선택). 요청에 완료 기준이 없으면 Studio Agent가 이 값을 쓴다. 건물 추출: IoU ≥ 0.6, F1 ≥ 0.75(시작값). |
+| 라벨 화소값 | 라벨 체계의 최상위 개념(`skos:topConceptOf`)을 IRI 순으로 1, 2, …에 대응시킨다. 배경은 0. 처리 도구가 이 값으로 마스크를 만든다. |
 
 새 파일은 `_template.ttl`을 복사해 시작한다. 에이전트는 기동할 때 이 디렉터리의 `*.ttl`(밑줄로 시작하는 파일 제외)을 모두 읽는다. 이 디렉터리는 이미지에 들어간다. 쿠버네티스 환경에서 이미지 재빌드 없이 분야를 더할 때는 설정 맵(ConfigMap) `geoai-domains`에 넣는다(`/app/domains`로 마운트).
 

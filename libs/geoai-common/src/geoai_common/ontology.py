@@ -17,7 +17,7 @@ from functools import cache
 from pathlib import Path
 
 from pyshacl import validate
-from rdflib import OWL, RDF, RDFS, SH, Graph, Literal, Namespace, URIRef
+from rdflib import OWL, RDF, RDFS, SH, SKOS, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
 
 from .messages import TaskRequestPayload, Violation
@@ -25,6 +25,28 @@ from .messages import TaskRequestPayload, Violation
 GAI = Namespace("https://ontology.geoai.local/core#")
 CORE_ONTOLOGY_IRI = URIRef("https://ontology.geoai.local/core")
 REQUEST_NS = Namespace("urn:geoai:request:")
+
+
+@dataclass(frozen=True)
+class JobTypeInfo:
+    """실행 작업 유형 (gai:Job 하위 클래스)."""
+
+    iri: str
+    label: str
+    realizes: str
+    accepts: tuple[str, ...]
+    output_type: str | None
+    entrypoint: str
+    accelerator: bool
+
+
+@dataclass(frozen=True)
+class LabelConcept:
+    """라벨 체계의 개념. value 는 라벨 마스크의 화소값(배경 0 다음부터 1, 2, ...)."""
+
+    iri: str
+    label: str
+    value: int
 
 
 @dataclass(frozen=True)
@@ -62,6 +84,11 @@ class OntologyRegistry:
         root = Path(root)
         ontology = Graph()
         ontology.parse(root / "core" / "geoai-core.ttl", format="turtle")
+        # 핵심 확장(실행 계층 등): core/ 의 나머지 *.ttl. 형상 제약 파일은 따로 읽는다.
+        for path in sorted((root / "core").glob("*.ttl")):
+            if path.name in ("geoai-core.ttl", "geoai-core-shapes.ttl") or path.name.startswith("_"):
+                continue
+            ontology.parse(path, format="turtle")
         shapes = Graph()
         shapes.parse(root / "core" / "geoai-core-shapes.ttl", format="turtle")
         domain_dirs = [root / "domains", *(Path(d) for d in extra_domain_dirs or [])]
@@ -126,6 +153,75 @@ class OntologyRegistry:
     def producers_of(self, asset_class: str, ancestor: str = str(GAI.StudioTask)) -> list[TaskTypeInfo]:
         """산출 유형이 asset_class 의 하위(또는 같은) 클래스인 작업 클래스."""
         return [i for i in self.plannable_task_types(ancestor) if self.is_subclass(i.produces, asset_class)]
+
+    # ------------------------------------------------------------------
+    # 실행 작업 유형 등록제, 분야 조회
+    # ------------------------------------------------------------------
+
+    def job_types(self) -> list[JobTypeInfo]:
+        out = []
+        for iri in self.subclasses(str(GAI.Job)):
+            node = URIRef(iri)
+            realizes = self.graph.value(node, GAI.realizesTask)
+            entry = self.graph.value(node, GAI.toolEntrypoint)
+            if realizes is None or entry is None:
+                continue
+            output = self.graph.value(node, GAI.jobOutputType)
+            accel = self.graph.value(node, GAI.requiresAccelerator)
+            out.append(
+                JobTypeInfo(
+                    iri=iri,
+                    label=self.label(iri),
+                    realizes=str(realizes),
+                    accepts=tuple(sorted(str(c) for c in self.graph.objects(node, GAI.acceptsInputType))),
+                    output_type=str(output) if output else None,
+                    entrypoint=str(entry),
+                    accelerator=bool(accel.toPython()) if isinstance(accel, Literal) else False,
+                )
+            )
+        return out
+
+    def job_for(self, task_type: str, input_types: list[str]) -> JobTypeInfo | None:
+        """작업 유형을 실현하고 입력을 처리할 수 있는 실행 작업 유형. 여럿이면 IRI 순 첫 번째."""
+        for job in sorted(self.job_types(), key=lambda j: j.iri):
+            if job.realizes != task_type:
+                continue
+            if job.accepts and not any(self.is_subclass(t, a) for t in input_types for a in job.accepts):
+                continue
+            return job
+        return None
+
+    def default_criteria(self, domain: str) -> list[dict]:
+        """분야의 권장 완료 기준 (gai:defaultCompletionCriterion)."""
+        out = []
+        for node in self.graph.objects(URIRef(domain), GAI.defaultCompletionCriterion):
+            metric = self.graph.value(node, GAI.metric)
+            operator = self.graph.value(node, GAI.operator)
+            threshold = self.graph.value(node, GAI.threshold)
+            if metric is None or operator is None or threshold is None:
+                continue
+            out.append({"metric": str(metric), "operator": str(operator), "threshold": float(threshold.toPython())})
+        return sorted(out, key=lambda c: c["metric"])
+
+    def label_concepts(self, domain: str) -> list[LabelConcept]:
+        """분야 라벨 체계의 최상위 개념. 분야 개체와 같은 이름공간의 gai:LabelScheme 를 찾는다."""
+        namespace = domain.rsplit("#", 1)[0] + "#"
+        schemes = [s for s in self.graph.subjects(RDF.type, GAI.LabelScheme) if str(s).startswith(namespace)]
+        concepts: list[str] = []
+        for scheme in schemes:
+            concepts.extend(str(c) for c in self.graph.subjects(SKOS.topConceptOf, scheme))
+        out = []
+        for idx, iri in enumerate(sorted(set(concepts)), start=1):
+            label = next(
+                (
+                    str(v)
+                    for v in self.graph.objects(URIRef(iri), SKOS.prefLabel)
+                    if getattr(v, "language", None) == "ko"
+                ),
+                iri.rsplit("#", 1)[-1],
+            )
+            out.append(LabelConcept(iri=iri, label=label, value=idx))
+        return out
 
     # ------------------------------------------------------------------
     # 형상 제약 검증

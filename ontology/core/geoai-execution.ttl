@@ -1,0 +1,102 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix job:  <https://ontology.geoai.local/jobs#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+
+# =============================================================================
+# 실행 계층 확장 (Execution Extension)
+# 범위: 실행 작업(gai:Job) 유형 등록제, 분야별 권장 완료 기준
+# 원칙: 실행 작업 유형 하나 = 온톨로지 클래스 하나 + 처리 도구 진입점 하나.
+#       전문 에이전트는 받은 작업 유형을 gai:realizesTask 로 실현하는 실행 작업을
+#       이 파일에서 찾아 작업 실행 엔진에 제출한다. 새 처리 도구는 클래스 하나를 더해 붙인다.
+#       핵심 온톨로지(geoai-core.ttl)는 고치지 않는다.
+# =============================================================================
+
+<https://ontology.geoai.local/core/execution>
+    a owl:Ontology ;
+    owl:imports <https://ontology.geoai.local/core> ;
+    owl:versionInfo "0.1.0" ;
+    dct:title "GeoAI 실행 계층 확장"@ko .
+
+# -----------------------------------------------------------------------------
+# 1. 실행 작업 유형 선언용 주석 속성
+# -----------------------------------------------------------------------------
+
+gai:realizesTask a owl:AnnotationProperty ;
+    rdfs:label "실현 작업 유형"@ko ;
+    rdfs:comment "실행 작업 클래스가 실현하는 작업(gai:Task) 클래스. gai:realizedBy 의 클래스 수준 역방향 선언."@ko .
+
+gai:acceptsInputType a owl:AnnotationProperty ;
+    rdfs:label "처리 가능 입력 유형"@ko ;
+    rdfs:comment "실행 작업이 처리할 수 있는 데이터 자산 클래스. 여러 값이면 그중 하나 이상이 입력에 있어야 한다. 없으면 작업 유형의 필요 입력을 그대로 따른다."@ko .
+
+gai:jobOutputType a owl:AnnotationProperty ;
+    rdfs:label "실행 작업 산출 유형"@ko ;
+    rdfs:comment "실행 작업이 실제로 만드는 데이터 자산 클래스. 작업 유형의 gai:producesOutputType 과 같거나 그 하위 클래스여야 한다."@ko .
+
+gai:toolEntrypoint a owl:AnnotationProperty ;
+    rdfs:label "처리 도구 진입점"@ko ;
+    rdfs:comment "처리 도구 이미지(geoai-tools)에서 실행할 명령 이름."@ko .
+
+gai:requiresAccelerator a owl:AnnotationProperty ;
+    rdfs:label "그래픽 처리 장치 필요"@ko ;
+    rdfs:comment "참이면 작업 실행 엔진이 그래픽 처리 장치 노드에 배치한다. 장치가 없으면 중앙 처리 장치로 실행한다."@ko .
+
+gai:defaultCompletionCriterion a owl:AnnotationProperty ;
+    rdfs:label "권장 완료 기준"@ko ;
+    rdfs:comment "분야(gai:Domain) 개체에 붙이는 기본 완료 기준(gai:CompletionCriterion). 요청에 완료 기준이 없으면 Studio Agent가 이 값을 쓴다."@ko .
+
+# -----------------------------------------------------------------------------
+# 2. 실행 작업 유형 (1년차 1순위 분야 건물 추출 경로)
+#    분할(segmentation) 계열 도구는 면 객체·래스터 분류 분야에 공통으로 쓴다.
+# -----------------------------------------------------------------------------
+
+job:OrthoIngestJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "정사영상 수집·정합"@ko ;
+    rdfs:comment "원본 영상의 좌표 참조 체계·해상도·밴드를 검사하고, 목표 좌표 참조 체계로 재투영·병합해 정사영상 하나를 만든다. 이미 정사보정된 항공·위성 영상 대상."@ko ;
+    gai:realizesTask gai:GeoDataProductionTask ;
+    gai:acceptsInputType gai:AerialImage , gai:SatelliteImage , gai:DroneImage ;
+    gai:jobOutputType gai:OrthoImage ;
+    gai:toolEntrypoint "ortho-ingest" ;
+    gai:requiresAccelerator false .
+
+job:TilingJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "타일 분할·품질 검사"@ko ;
+    rdfs:comment "정사영상을 고정 크기 타일로 나누고, 무자료 비율이 높은 타일을 거른 뒤, 공간 블록 단위로 학습·검증·시험 집합을 나눈다. 밴드별 정규화 통계를 함께 남긴다."@ko ;
+    gai:realizesTask gai:PreprocessingTask ;
+    gai:acceptsInputType gai:OrthoImage ;
+    gai:jobOutputType gai:AnalysisReadyData ;
+    gai:toolEntrypoint "tiling" ;
+    gai:requiresAccelerator false .
+
+job:VectorLabelRasterizeJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "벡터 라벨 래스터화"@ko ;
+    rdfs:comment "참조 벡터(건물 윤곽 등)를 분석 준비 데이터의 좌표 참조 체계로 변환하고 기하 오류를 고친 뒤, 타일마다 라벨 마스크로 래스터화한다."@ko ;
+    gai:realizesTask gai:LabelingTask ;
+    gai:acceptsInputType gai:AnalysisReadyData ;
+    gai:jobOutputType gai:LabelSet ;
+    gai:toolEntrypoint "rasterize-labels" ;
+    gai:requiresAccelerator false .
+
+job:SegmentationTrainJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "분할 모델 학습"@ko ;
+    rdfs:comment "U-Net 분할 모델을 학습하고 검증 집합 교집합 대 합집합 비율이 가장 높은 가중치를 모델로 등록한다. 사전 학습 가중치는 데이터·모델 저장소에서만 읽는다."@ko ;
+    gai:realizesTask gai:ModelTrainingTask ;
+    gai:jobOutputType gai:Model ;
+    gai:toolEntrypoint "segmentation-train" ;
+    gai:requiresAccelerator true .
+
+job:SegmentationEvaluateJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "분할 모델 성능 검증"@ko ;
+    rdfs:comment "시험 집합에서 화소 단위(교집합 대 합집합 비율, F1, 정밀도, 재현율)와 객체 단위(F1) 지표를 산출하고, 예측 다각형과 미리보기 영상을 남긴다."@ko ;
+    gai:realizesTask gai:EvaluationTask ;
+    gai:jobOutputType gai:EvaluationReport ;
+    gai:toolEntrypoint "segmentation-evaluate" ;
+    gai:requiresAccelerator true .

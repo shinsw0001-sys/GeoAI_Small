@@ -119,3 +119,73 @@ def test_agent_card(client):
         "SpatialAnalysisTask",
         "EvaluationTask",
     }
+
+
+class LowScoreAgent(EchoSubAgent):
+    """완료 기준보다 낮은 지표를 돌려주는 모의 하위 에이전트."""
+
+    async def send(self, envelope: Envelope) -> None:
+        if envelope.performative is Performative.RESULT:
+            envelope.payload["metrics"] = {k: v - 0.2 for k, v in envelope.payload["metrics"].items()}
+        await super().send(envelope)
+
+
+async def test_completion_criteria_not_met_fails_parent(onto):
+    bus, store = InMemoryBus(), InMemoryStateStore()
+    studio = StudioAgent("studio-agent", bus, store, onto)
+    await studio.start()
+    for sid in SUB_AGENTS:
+        cls = LowScoreAgent if sid == "model-training-agent" else EchoSubAgent
+        await cls(sid, bus, store, onto).start()
+    inbox = []
+
+    async def collect(e):
+        inbox.append(e)
+
+    await bus.subscribe("ops-console", collect)
+    accept = await studio.handle(
+        Envelope.model_validate(request_envelope("ModelTrainingTask", [asset("a1", "AerialImage")]))
+    )
+    await bus.drain()
+    parent = await store.get_task(accept.task_id)
+    assert parent.status is TaskStatus.FAILED
+    assert parent.detail.startswith("완료 기준 미달: mIoU 0.5")
+    assert parent.metrics["mIoU"] == pytest.approx(0.5)
+    failure = [e for e in inbox if e.performative is Performative.FAILURE]
+    assert failure and failure[0].payload["reason"] == "completion_criteria_not_met"
+    # 하위 작업 자체는 모두 완료 상태다(실행은 성공, 판정만 미달)
+    assert all(c.status is TaskStatus.SUCCEEDED for c in await store.list_children(parent.task_id))
+
+
+async def test_domain_default_criteria_are_applied(onto):
+    bus, store, studio, subs, _ = await system(onto)
+    body = request_envelope("ModelTrainingTask", [asset("a1", "AerialImage")])
+    body["payload"]["domain"] = "https://ontology.geoai.local/domain/building-extraction#Domain"
+    body["payload"]["completion_criteria"] = []
+    accept = await studio.handle(Envelope.model_validate(body))
+    assert accept.performative is Performative.ACCEPT
+    await bus.drain()
+    parent = await store.get_task(accept.task_id)
+    assert {c["metric"] for c in parent.request["completion_criteria"]} == {"IoU", "F1"}
+    train_req = subs["model-training-agent"].received[-1]
+    assert {c["metric"] for c in train_req.payload["completion_criteria"]} == {"IoU", "F1"}
+    assert parent.status is TaskStatus.SUCCEEDED
+
+
+def test_http_task_list_and_messages(client):
+    r = client.post("/v1/messages", json=request_envelope("SpatialAnalysisTask", [asset("o1", "OrthoImage")]))
+    task_id = r.json()["task_id"]
+    tasks = client.get("/v1/tasks", params={"project_id": "p-001"}).json()["tasks"]
+    assert [t["task_id"] for t in tasks] == [task_id]
+    assert client.get("/v1/tasks", params={"project_id": "none"}).json()["tasks"] == []
+    msgs = client.get(f"/v1/tasks/{task_id}/messages").json()["messages"]
+    assert [m["performative"] for m in msgs][:2] == ["request", "accept"]
+    assert client.get("/v1/tasks/nope/messages").status_code == 404
+
+
+def test_agent_card_domain_defaults(client):
+    card = client.get("/v1/agent-card").json()
+    building = next(d for d in card["domains"] if "building-extraction" in d["iri"])
+    assert building["label"] == "건물 추출"
+    assert {c["metric"] for c in building["default_criteria"]} == {"IoU", "F1"}
+    assert building["label_concepts"][0]["label"] == "건물"

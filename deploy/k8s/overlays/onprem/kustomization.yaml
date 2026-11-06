@@ -12,6 +12,12 @@ images:
   - name: geoai/studio-agent
     newName: registry.geoai.internal/geoai/studio-agent
     newTag: "0.1.0"
+  - name: geoai/specialist-agent
+    newName: registry.geoai.internal/geoai/specialist-agent
+    newTag: "0.1.0"
+  - name: geoai/ops-console
+    newName: registry.geoai.internal/geoai/ops-console
+    newTag: "0.1.0"
   - name: nats
     newName: registry.geoai.internal/mirror/nats
     newTag: 2.10.22-alpine
@@ -25,3 +31,16 @@ patches:
   - target: {kind: Deployment, name: studio-agent}
     patch: |
       - {op: replace, path: /spec/template/spec/containers/0/imagePullPolicy, value: Always}
+  # 처리 도구 이미지는 환경 변수로 넘기므로 images 변환 대상이 아니다. 사설 레지스트리 주소로 직접 바꾼다.
+  - target: {kind: Deployment, labelSelector: "app.kubernetes.io/component=agent", name: "(geo-data-production|preprocessing|model-training|analysis-evaluation)-agent"}
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: any}
+      spec:
+        template:
+          spec:
+            containers:
+              - name: agent
+                env:
+                  - {name: GEOAI_TOOLS_IMAGE, value: "registry.geoai.internal/geoai/geoai-tools:0.1.0"}

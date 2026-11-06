@@ -1,4 +1,5 @@
-# 지속적 통합: 정적 검사, 단위 시험, PostgreSQL·NATS 통합 시험, 매니페스트 검증, 이미지 빌드
+# 지속적 통합: 정적 검사, 단위 시험, PostgreSQL·NATS 통합 시험, 건물 추출 종단 시험, 매니페스트 검증, 이미지 빌드
+# 처리 도구 이미지(CUDA 포함 PyTorch, 수 GB)는 시간 때문에 지속적 통합에서 빌드하지 않는다. `make image` 로 빌드한다.
 name: ci
 on:
   push:
@@ -21,11 +22,13 @@ jobs:
         with: {python-version: "3.12"}
       - name: NATS JetStream 기동
         run: docker run -d --name nats -p 4222:4222 nats:2.10.22-alpine -js
-      - name: 의존성 설치
+      - name: 의존성 설치 (처리 도구 제외)
         run: |
-          python -m pip install --require-hashes -r agents/studio-agent/requirements.lock
-          python -m pip install --no-deps -e libs/geoai-common -e agents/studio-agent
-          python -m pip install pytest==9.2.0 pytest-asyncio==1.4.1.post1 httpx==0.28.1 ruff==0.17.4
+          python -m pip install --require-hashes -r agents/studio-agent/requirements.lock \
+            -r agents/specialist-agents/requirements.lock -r console/ops-console/requirements.lock
+          python -m pip install --no-deps -e libs/geoai-common -e agents/studio-agent \
+            -e agents/specialist-agents -e console/ops-console
+          python -m pip install pytest==9.2.0 pytest-asyncio==1.4.1.post1 ruff==0.17.4
       - name: 정적 검사
         run: |
           ruff check .
@@ -36,7 +39,25 @@ jobs:
         env:
           GEOAI_TEST_DATABASE_URL: postgresql://geoai:geoai@localhost:5432/geoai
           GEOAI_TEST_NATS_URL: nats://localhost:4222
-        run: pytest -q
+        run: pytest -q -m "not e2e"
+
+  pipeline:
+    # 처리 도구(PyTorch 포함)를 설치해 건물 추출 5단계를 실제로 돌린다. 그래픽 처리 장치 없이 중앙 처리 장치로 실행.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: 의존성 설치 (전체)
+        run: |
+          python -m pip install --require-hashes -r agents/studio-agent/requirements.lock \
+            -r agents/specialist-agents/requirements.lock -r console/ops-console/requirements.lock \
+            -r tools/geoai-tools/requirements.lock
+          python -m pip install --no-deps -e libs/geoai-common -e agents/studio-agent \
+            -e agents/specialist-agents -e console/ops-console -e tools/geoai-tools
+          python -m pip install pytest==9.2.0 pytest-asyncio==1.4.1.post1
+      - name: 처리 도구 시험과 건물 추출 종단 시험
+        run: pytest -q tools/geoai-tools/tests tests/e2e -s
 
   manifests:
     runs-on: ubuntu-24.04
@@ -60,5 +81,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Studio Agent 이미지 빌드
-        run: docker build -f agents/studio-agent/Dockerfile -t geoai/studio-agent:ci .
+      - name: 이미지 빌드 (Studio Agent, 전문 에이전트, 운영 콘솔)
+        run: |
+          docker build -f agents/studio-agent/Dockerfile -t geoai/studio-agent:ci .
+          docker build -f agents/specialist-agents/Dockerfile -t geoai/specialist-agent:ci .
+          docker build -f console/ops-console/Dockerfile -t geoai/ops-console:ci .

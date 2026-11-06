@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoAI 운영 콘솔</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6f73'/%3E%3Cpath d='M8 22l6-12 4 8 3-5 3 9z' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="nav" aria-label="주 메뉴">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <strong>GeoAI Studio</strong>
+          <small>운영 콘솔</small>
+        </div>
+      </div>
+      <nav>
+        <a href="#/" data-route="dashboard">현황</a>
+        <a href="#/new" data-route="new">새 작업</a>
+        <a href="#/data" data-route="data">원본 자료</a>
+      </nav>
+      <div class="nav-foot">
+        <button type="button" id="theme-toggle" class="ghost small" aria-label="화면 밝기 전환">밝기 전환</button>
+        <small id="ontology-version"></small>
+      </div>
+    </aside>
+    <main>
+      <div id="alert-banner" class="alert-banner" role="alert" hidden></div>
+      <div id="view" aria-live="polite"></div>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

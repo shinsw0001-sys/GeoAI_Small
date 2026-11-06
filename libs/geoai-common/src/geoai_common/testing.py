@@ -34,7 +34,9 @@ class EchoSubAgent(BaseAgent):
             storage_uri=f"s3://results/{envelope.task_id}/output",
             crs=next((a.crs for a in request.inputs if a.crs), None),
         )
+        # 완료 기준이 있으면 기준값을 그대로 지표로 돌려준다(>=, <=, == 충족).
+        metrics = {"mock": 1.0, **{c.metric: c.threshold for c in request.completion_criteria}}
         await self.send(envelope.reply(Performative.ACCEPT, self.agent_id))
         await self.send(
-            envelope.reply(Performative.RESULT, self.agent_id, ResultPayload(outputs=[output], metrics={"mock": 1.0}))
+            envelope.reply(Performative.RESULT, self.agent_id, ResultPayload(outputs=[output], metrics=metrics))
         )

@@ -77,6 +77,14 @@ class StateStore(Protocol):
 
     async def record_message(self, envelope: Envelope) -> None: ...
 
+    async def list_tasks(self, project_id: str | None = None, limit: int = 50) -> list[TaskRecord]:
+        """최상위 작업(parent_id 없음), 최근 순."""
+        ...
+
+    async def list_messages(self, conversation_id: str) -> list[Envelope]:
+        """대화 하나의 메시지 기록, 시간 순."""
+        ...
+
     async def close(self) -> None: ...
 
 
@@ -114,7 +122,21 @@ class InMemoryStateStore:
             return self._tasks[task_id].model_copy(deep=True)
 
     async def record_message(self, envelope: Envelope) -> None:
+        if any(m.message_id == envelope.message_id for m in self.messages[-200:]):
+            return
         self.messages.append(envelope)
+
+    async def list_tasks(self, project_id: str | None = None, limit: int = 50) -> list[TaskRecord]:
+        tops = [
+            r
+            for r in self._tasks.values()
+            if r.parent_id is None and (project_id is None or r.project_id == project_id)
+        ]
+        tops.sort(key=lambda r: r.created_at, reverse=True)
+        return [r.model_copy(deep=True) for r in tops[:limit]]
+
+    async def list_messages(self, conversation_id: str) -> list[Envelope]:
+        return [m for m in self.messages if m.conversation_id == conversation_id]
 
     async def close(self) -> None:
         return None
@@ -238,6 +260,28 @@ class PostgresStateStore:
                     envelope.created_at,
                 ),
             )
+
+    async def list_tasks(self, project_id: str | None = None, limit: int = 50) -> list[TaskRecord]:
+        sql = "SELECT record FROM geoai_task WHERE parent_id IS NULL"
+        args: list[Any] = []
+        if project_id is not None:
+            sql += " AND project_id = %s"
+            args.append(project_id)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        args.append(limit)
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(sql, args)
+            rows = await cur.fetchall()
+        return [TaskRecord.model_validate(r[0]) for r in rows]
+
+    async def list_messages(self, conversation_id: str) -> list[Envelope]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT envelope FROM geoai_message WHERE conversation_id = %s ORDER BY created_at, message_id",
+                (conversation_id,),
+            )
+            rows = await cur.fetchall()
+        return [Envelope.model_validate(r[0]) for r in rows]
 
     async def close(self) -> None:
         await self._pool.close()

@@ -17,7 +17,7 @@ from .messages import (
     TaskRequestPayload,
     Violation,
 )
-from .ontology import GAI, OntologyRegistry, agent_id_for
+from .ontology import GAI, JobTypeInfo, LabelConcept, OntologyRegistry, agent_id_for
 from .state import InMemoryStateStore, PostgresStateStore, StateStore, TaskRecord, TaskStatus
 
 __all__ = [
@@ -31,6 +31,8 @@ __all__ = [
     "FailurePayload",
     "InMemoryBus",
     "InMemoryStateStore",
+    "JobTypeInfo",
+    "LabelConcept",
     "MessageBus",
     "NatsBus",
     "OntologyRegistry",

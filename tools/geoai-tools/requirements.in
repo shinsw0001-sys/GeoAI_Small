@@ -1,0 +1,8 @@
+pydantic==2.14.3
+rdflib==7.6.0
+pyshacl==0.40.2
+boto3==1.43.125
+numpy==2.5.4
+rasterio==1.5.2
+shapely==2.2.0
+torch==2.15.0

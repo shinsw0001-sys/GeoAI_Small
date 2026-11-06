@@ -9,6 +9,19 @@ patches:
   - target: {kind: Deployment, name: studio-agent}
     patch: |
       - {op: replace, path: /spec/replicas, value: 1}
+  # 개발·시험 클러스터에는 그래픽 처리 장치가 없다. 학습·평가 실행 작업을 중앙 처리 장치로 돌린다.
+  - target: {kind: Deployment, labelSelector: "app.kubernetes.io/component=agent", name: "(geo-data-production|preprocessing|model-training|analysis-evaluation)-agent"}
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: any}
+      spec:
+        template:
+          spec:
+            containers:
+              - name: agent
+                env:
+                  - {name: GEOAI_JOB_GPU, value: "false"}
   - target: {kind: StatefulSet}
     patch: |
       - {op: replace, path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage, value: 1Gi}
@@ -28,6 +41,17 @@ secretGenerator:
     namespace: geoai
     literals:
       - database-url=postgresql://geoai:geoai-dev@postgres.geoai-data.svc.cluster.local:5432/geoai
+  - name: geoai-agents
+    namespace: geoai
+    literals:
+      - database-url=postgresql://geoai:geoai-dev@postgres.geoai-data.svc.cluster.local:5432/geoai
+      - s3-access-key=geoai
+      - s3-secret-key=geoai-dev-secret
+  - name: geoai-object-store-client
+    namespace: geoai-jobs
+    literals:
+      - access-key=geoai
+      - secret-key=geoai-dev-secret
   - name: geoai-object-store
     namespace: geoai-data
     literals:

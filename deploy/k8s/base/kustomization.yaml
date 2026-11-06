@@ -8,6 +8,9 @@ resources:
   - postgres/postgres.yaml
   - object-store/object-store.yaml
   - studio-agent/studio-agent.yaml
+  - specialist-agents/specialist-agents.yaml
+  - jobs/jobs.yaml
+  - ops-console/ops-console.yaml
 labels:
   - pairs: {app.kubernetes.io/version: "0.1.0"}
     includeSelectors: false
