@@ -1,0 +1,28 @@
+# 네임스페이스 구성 (설계서 v1.0 컨테이너 구성과 같음)
+#   geoai          에이전트, 메시지 버스, (추후) 온톨로지 레지스트리·운영 콘솔
+#   geoai-data     프로젝트 상태 저장소(PostgreSQL+PostGIS), 데이터·모델 저장소(S3 호환)
+#   geoai-jobs     작업 실행 엔진(Argo Workflows)과 실행 작업 컨테이너. 이 골격에서는 이름만 만든다.
+#   observability  추적·지표·로그 수집. 이 골격에서는 이름만 만든다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: geoai
+  labels: {app.kubernetes.io/part-of: geoai}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: geoai-data
+  labels: {app.kubernetes.io/part-of: geoai}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: geoai-jobs
+  labels: {app.kubernetes.io/part-of: geoai}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels: {app.kubernetes.io/part-of: geoai}

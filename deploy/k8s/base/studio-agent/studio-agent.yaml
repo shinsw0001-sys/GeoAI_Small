@@ -1,0 +1,81 @@
+# Studio Agent: 상태를 두지 않는 서비스. 상태는 프로젝트 상태 저장소에만 두므로 수평 확장할 수 있다.
+# 분야 온톨로지는 설정 맵 geoai-domains 를 /app/domains 에 붙여 주입한다(이미지 재빌드 불필요).
+# 비밀(Secret) geoai-studio-agent 는 오버레이가 만든다 (키: database-url, 선택 llm-api-key).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: studio-agent
+  namespace: geoai
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: studio-agent
+  namespace: geoai
+  labels: {app.kubernetes.io/name: studio-agent}
+spec:
+  selector: {app.kubernetes.io/name: studio-agent}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: studio-agent
+  namespace: geoai
+  labels: {app.kubernetes.io/name: studio-agent, app.kubernetes.io/part-of: geoai, app.kubernetes.io/component: agent}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: studio-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: studio-agent, app.kubernetes.io/part-of: geoai, app.kubernetes.io/component: agent}
+    spec:
+      serviceAccountName: studio-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: studio-agent
+          image: geoai/studio-agent:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: GEOAI_AGENT_ID, value: studio-agent}
+            - {name: GEOAI_ONTOLOGY_DIR, value: /app/ontology}
+            - {name: GEOAI_DOMAIN_DIRS, value: /app/domains}
+            - {name: GEOAI_NATS_URL, value: "nats://nats.geoai.svc.cluster.local:4222"}
+            - name: GEOAI_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: geoai-studio-agent, key: database-url}}
+            # 언어 모델 호출부: OpenAI 호환 주소. 외부 API 또는 자체 서버 vLLM 으로 바꿔 끼운다.
+            - name: GEOAI_LLM_BASE_URL
+              valueFrom: {configMapKeyRef: {name: geoai-llm, key: base-url, optional: true}}
+            - name: GEOAI_LLM_MODEL
+              valueFrom: {configMapKeyRef: {name: geoai-llm, key: model, optional: true}}
+            - name: GEOAI_LLM_API_KEY
+              valueFrom: {secretKeyRef: {name: geoai-studio-agent, key: llm-api-key, optional: true}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: domains, mountPath: /app/domains, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: domains
+          configMap: {name: geoai-domains}
+        - name: tmp
+          emptyDir: {}

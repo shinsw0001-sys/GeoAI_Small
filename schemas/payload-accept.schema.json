@@ -1,0 +1,57 @@
+{
+  "$defs": {
+    "PlanStep": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_type": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Task Type",
+          "type": "string"
+        },
+        "agent": {
+          "title": "Agent",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "task_type",
+        "agent"
+      ],
+      "title": "PlanStep",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "performative=accept 본문. 접수한 작업과 하위 작업 계획.",
+  "properties": {
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "plan": {
+      "items": {
+        "$ref": "#/$defs/PlanStep"
+      },
+      "title": "Plan",
+      "type": "array"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "title": "AcceptPayload",
+  "type": "object"
+}

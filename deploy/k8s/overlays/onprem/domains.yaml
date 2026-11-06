@@ -1,0 +1,8 @@
+# 분야 온톨로지 설정 맵. 1년차 4개 분야 파일(ontology/domains/*.ttl)이 확정되면 data 에 넣는다.
+#   kubectl create configmap geoai-domains -n geoai --from-file=ontology/domains/ --dry-run=client -o yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: geoai-domains
+  namespace: geoai
+data: {}

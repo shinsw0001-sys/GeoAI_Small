@@ -1,0 +1,379 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix geo:  <http://www.opengis.net/ont/geosparql#> .
+@prefix time: <http://www.w3.org/2006/time#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+
+# =============================================================================
+# GeoAI 핵심 온톨로지 (GeoAI Core Ontology)
+# 범위: GeoAI Studio + 공통 데이터·실행 기반
+# 원칙: 모든 에이전트가 같은 어휘를 참조한다. 분야(domain) 어휘는
+#       ontology/domains/*.ttl 이 이 파일을 owl:imports 하여 확장한다.
+# 재사용 표준: PROV-O(행위자·활동·산출물), GeoSPARQL(공간 객체),
+#              OWL-Time(시간), DCAT(데이터셋), SKOS(라벨 체계)
+# =============================================================================
+
+<https://ontology.geoai.local/core>
+    a owl:Ontology ;
+    owl:versionIRI <https://ontology.geoai.local/core/0.1.0> ;
+    owl:versionInfo "0.1.0" ;
+    dct:title "GeoAI 핵심 온톨로지"@ko ;
+    dct:description "GeoAI Studio와 공통 데이터·실행 기반의 공유 의미 체계. 에이전트, 프로젝트, 작업, 데이터 자산, 분야, 완료 기준을 정의한다."@ko .
+
+# -----------------------------------------------------------------------------
+# 1. 계획 규칙용 주석 속성 (클래스 수준 메타데이터)
+#    Studio Agent의 계획기(planner)는 아래 세 속성만 읽고 하위 작업을 역방향
+#    연쇄(backward chaining)로 구성한다. 새 작업 유형을 추가할 때 코드를 고치지
+#    않고 이 세 속성만 선언하면 된다.
+# -----------------------------------------------------------------------------
+
+gai:requiresInputType a owl:AnnotationProperty ;
+    rdfs:label "필요 입력 유형"@ko ;
+    rdfs:comment "작업 클래스가 실행에 반드시 필요로 하는 데이터 자산 클래스. 여러 값이면 모두 필요하다."@ko .
+
+gai:producesOutputType a owl:AnnotationProperty ;
+    rdfs:label "산출 유형"@ko ;
+    rdfs:comment "작업 클래스가 만들어 내는 데이터 자산 클래스."@ko .
+
+gai:handledBy a owl:AnnotationProperty ;
+    rdfs:label "담당 에이전트 유형"@ko ;
+    rdfs:comment "작업 클래스를 처리하는 에이전트 클래스."@ko .
+
+gai:dtCorrespondsTo a owl:AnnotationProperty ;
+    rdfs:label "디지털 트윈 객체 대응"@ko ;
+    rdfs:comment "확장 접점: 라벨 개념(skos:Concept)을 AIAGeoDT 객체 클래스에 대응시킨다. 1년차에는 정의만 하고 사용하지 않는다."@ko .
+
+# -----------------------------------------------------------------------------
+# 2. 에이전트 계층 (prov:Agent 하위)
+# -----------------------------------------------------------------------------
+
+gai:Agent a owl:Class ;
+    rdfs:subClassOf prov:Agent ;
+    rdfs:label "에이전트"@ko ;
+    rdfs:comment "판단·조율을 맡는 소프트웨어 행위자. 실제 계산은 작업 실행 엔진이 수행한다."@ko .
+
+gai:SuperAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "슈퍼 에이전트"@ko ;
+    rdfs:comment "확장 접점: 프로젝트 오케스트레이션(분석·계획, 임무 할당·협업, 진행·검증·완료). 1단계 범위 밖."@ko .
+
+gai:StudioAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "스튜디오 에이전트"@ko ;
+    rdfs:comment "GeoAI Studio 대표 에이전트. Studio 작업 요청을 받아 하위 작업으로 분해하고 하위 에이전트에 할당한다."@ko .
+
+gai:GeoDataProductionAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "공간정보 생성·가공 에이전트"@ko ;
+    rdfs:comment "사진측량, 라이다 처리, 데이터 융합으로 공간정보 산출물을 만든다."@ko .
+
+gai:PreprocessingAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "공간데이터 전처리 에이전트"@ko ;
+    rdfs:comment "좌표·해상도·밴드 정합, 품질 검사, 정규화·분할."@ko .
+
+gai:ModelTrainingAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "모델·학습 에이전트"@ko ;
+    rdfs:comment "공개 모델 선정, 라벨링, 미세조정."@ko .
+
+gai:AnalysisEvaluationAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "분석·평가 에이전트"@ko ;
+    rdfs:comment "추론, 공간 분석, 예측, 성능 검증."@ko .
+
+gai:BaseOperationsAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "기반 운영 에이전트"@ko ;
+    rdfs:comment "공통 데이터·실행 기반의 데이터 품질, 자원·복구 조율, 상태 일관성 관리."@ko .
+
+gai:DTAgent a owl:Class ;
+    rdfs:subClassOf gai:Agent ;
+    rdfs:label "디지털 트윈 에이전트"@ko ;
+    rdfs:comment "확장 접점: AIAGeoDT 대표 에이전트. 1단계 범위 밖."@ko .
+
+# -----------------------------------------------------------------------------
+# 3. 프로젝트·작업·실행 단위 (prov:Activity 하위)
+# -----------------------------------------------------------------------------
+
+gai:Project a owl:Class ;
+    rdfs:subClassOf prov:Activity ;
+    rdfs:label "프로젝트"@ko ;
+    rdfs:comment "목표, 계획, 담당, 진척, 산출물을 묶는 최상위 관리 단위."@ko .
+
+gai:Task a owl:Class ;
+    rdfs:subClassOf prov:Activity ;
+    rdfs:label "작업"@ko ;
+    rdfs:comment "에이전트에게 할당되는 논리적 작업 단위."@ko .
+
+gai:StudioTask a owl:Class ;
+    rdfs:subClassOf gai:Task ;
+    rdfs:label "스튜디오 작업"@ko ;
+    rdfs:comment "Studio Agent가 접수하는 모든 작업의 상위 클래스."@ko .
+
+gai:GeoDataProductionTask a owl:Class ;
+    rdfs:subClassOf gai:StudioTask ;
+    rdfs:label "공간정보 생성·가공 작업"@ko ;
+    rdfs:comment "원본에서 정사 영상, 수치 표면 모델, 분류 점군 같은 공간정보 산출물을 만든다."@ko ;
+    gai:requiresInputType gai:RawData ;
+    gai:producesOutputType gai:SpatialProduct ;
+    gai:handledBy gai:GeoDataProductionAgent .
+
+gai:PreprocessingTask a owl:Class ;
+    rdfs:subClassOf gai:StudioTask ;
+    rdfs:label "전처리 작업"@ko ;
+    rdfs:comment "공간정보 산출물을 좌표·해상도·밴드 정합, 품질 검사, 정규화·분할하여 학습·분석 입력으로 만든다."@ko ;
+    gai:requiresInputType gai:SpatialProduct ;
+    gai:producesOutputType gai:AnalysisReadyData ;
+    gai:handledBy gai:PreprocessingAgent .
+
+gai:LabelingTask a owl:Class ;
+    rdfs:subClassOf gai:StudioTask ;
+    rdfs:label "라벨링 작업"@ko ;
+    gai:requiresInputType gai:AnalysisReadyData ;
+    gai:producesOutputType gai:LabelSet ;
+    gai:handledBy gai:ModelTrainingAgent .
+
+gai:ModelTrainingTask a owl:Class ;
+    rdfs:subClassOf gai:StudioTask ;
+    rdfs:label "모델 학습 작업"@ko ;
+    gai:requiresInputType gai:AnalysisReadyData , gai:LabelSet ;
+    gai:producesOutputType gai:Model ;
+    gai:handledBy gai:ModelTrainingAgent .
+
+gai:AnalysisEvaluationTask a owl:Class ;
+    rdfs:subClassOf gai:StudioTask ;
+    rdfs:label "분석·평가 작업"@ko ;
+    rdfs:comment "분석·평가 에이전트가 맡는 작업의 묶음 클래스. 요청은 하위 클래스로 한다."@ko .
+
+gai:InferenceTask a owl:Class ;
+    rdfs:subClassOf gai:AnalysisEvaluationTask ;
+    rdfs:label "추론 작업"@ko ;
+    gai:requiresInputType gai:AnalysisReadyData , gai:Model ;
+    gai:producesOutputType gai:ResultProduct ;
+    gai:handledBy gai:AnalysisEvaluationAgent .
+
+gai:SpatialAnalysisTask a owl:Class ;
+    rdfs:subClassOf gai:AnalysisEvaluationTask ;
+    rdfs:label "공간 분석 작업"@ko ;
+    gai:requiresInputType gai:ProcessedData ;
+    gai:producesOutputType gai:ResultProduct ;
+    gai:handledBy gai:AnalysisEvaluationAgent .
+
+gai:EvaluationTask a owl:Class ;
+    rdfs:subClassOf gai:AnalysisEvaluationTask ;
+    rdfs:label "성능 검증 작업"@ko ;
+    gai:requiresInputType gai:Model , gai:LabelSet ;
+    gai:producesOutputType gai:EvaluationReport ;
+    gai:handledBy gai:AnalysisEvaluationAgent .
+
+gai:Job a owl:Class ;
+    rdfs:subClassOf prov:Activity ;
+    rdfs:label "실행 작업"@ko ;
+    rdfs:comment "작업 실행 엔진이 컨테이너로 수행하는 물리적 실행 단위. 하나의 작업은 하나 이상의 실행 작업으로 수행된다(gai:realizedBy)."@ko .
+
+gai:TaskStatus a owl:Class ;
+    rdfs:label "작업 상태"@ko ;
+    owl:oneOf ( gai:Requested gai:Accepted gai:Planned gai:Running gai:Succeeded gai:Failed gai:Rejected ) .
+
+gai:Requested a gai:TaskStatus ; rdfs:label "요청됨"@ko .
+gai:Accepted  a gai:TaskStatus ; rdfs:label "접수됨"@ko .
+gai:Planned   a gai:TaskStatus ; rdfs:label "계획됨"@ko .
+gai:Running   a gai:TaskStatus ; rdfs:label "진행 중"@ko .
+gai:Succeeded a gai:TaskStatus ; rdfs:label "완료"@ko .
+gai:Failed    a gai:TaskStatus ; rdfs:label "실패"@ko .
+gai:Rejected  a gai:TaskStatus ; rdfs:label "거절됨"@ko .
+
+gai:CompletionCriterion a owl:Class ;
+    rdfs:label "완료 기준"@ko ;
+    rdfs:comment "작업 완료를 판정하는 정량 조건. 지표, 비교 연산자, 기준값으로 구성한다."@ko .
+
+# -----------------------------------------------------------------------------
+# 4. 데이터 자산 (prov:Entity, dcat:Dataset 하위)
+# -----------------------------------------------------------------------------
+
+gai:DataAsset a owl:Class ;
+    rdfs:subClassOf prov:Entity , dcat:Dataset ;
+    rdfs:label "데이터 자산"@ko ;
+    rdfs:comment "데이터·모델 저장소에 보관되는 모든 산출물과 원본."@ko .
+
+gai:RawData a owl:Class ;
+    rdfs:subClassOf gai:DataAsset ;
+    rdfs:label "원본 데이터"@ko .
+
+gai:AerialImage a owl:Class ;
+    rdfs:subClassOf gai:RawData ;
+    rdfs:label "항공 사진"@ko .
+
+gai:SatelliteImage a owl:Class ;
+    rdfs:subClassOf gai:RawData ;
+    rdfs:label "위성 영상"@ko .
+
+gai:LidarPointCloud a owl:Class ;
+    rdfs:subClassOf gai:RawData ;
+    rdfs:label "라이다 점군"@ko .
+
+gai:DroneImage a owl:Class ;
+    rdfs:subClassOf gai:RawData ;
+    rdfs:label "드론 영상"@ko .
+
+gai:ProcessedData a owl:Class ;
+    rdfs:subClassOf gai:DataAsset ;
+    rdfs:label "가공 데이터"@ko .
+
+gai:SpatialProduct a owl:Class ;
+    rdfs:subClassOf gai:ProcessedData ;
+    rdfs:label "공간정보 산출물"@ko ;
+    rdfs:comment "공간정보 생성·가공 작업의 산출."@ko .
+
+gai:OrthoImage a owl:Class ;
+    rdfs:subClassOf gai:SpatialProduct ;
+    rdfs:label "정사 영상"@ko .
+
+gai:DigitalSurfaceModel a owl:Class ;
+    rdfs:subClassOf gai:SpatialProduct ;
+    rdfs:label "수치 표면 모델"@ko .
+
+gai:ProcessedPointCloud a owl:Class ;
+    rdfs:subClassOf gai:SpatialProduct ;
+    rdfs:label "가공 점군"@ko .
+
+gai:AnalysisReadyData a owl:Class ;
+    rdfs:subClassOf gai:ProcessedData ;
+    rdfs:label "분석 준비 데이터"@ko ;
+    rdfs:comment "전처리 작업의 산출. 정합·정규화·분할을 마쳐 학습·추론에 바로 쓴다."@ko .
+
+gai:LabelSet a owl:Class ;
+    rdfs:subClassOf gai:DataAsset ;
+    rdfs:label "라벨 세트"@ko .
+
+gai:Model a owl:Class ;
+    rdfs:subClassOf gai:DataAsset ;
+    rdfs:label "모델"@ko .
+
+gai:ResultProduct a owl:Class ;
+    rdfs:subClassOf gai:DataAsset ;
+    rdfs:label "결과 산출물"@ko .
+
+gai:EvaluationReport a owl:Class ;
+    rdfs:subClassOf gai:ResultProduct ;
+    rdfs:label "성능 검증 보고"@ko .
+
+# -----------------------------------------------------------------------------
+# 5. 분야·라벨 체계
+# -----------------------------------------------------------------------------
+
+gai:Domain a owl:Class ;
+    rdfs:label "분야"@ko ;
+    rdfs:comment "업무 분야. 개체는 ontology/domains/*.ttl 에서 선언한다(1년차 4개, 최종 20개)."@ko .
+
+gai:LabelScheme a owl:Class ;
+    rdfs:subClassOf skos:ConceptScheme ;
+    rdfs:label "라벨 체계"@ko .
+
+# -----------------------------------------------------------------------------
+# 6. 객체 속성
+# -----------------------------------------------------------------------------
+
+gai:inDomain a owl:ObjectProperty ;
+    rdfs:label "소속 분야"@ko ;
+    rdfs:range gai:Domain .
+
+gai:inProject a owl:ObjectProperty ;
+    rdfs:label "소속 프로젝트"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:Project .
+
+gai:hasInput a owl:ObjectProperty ;
+    rdfs:subPropertyOf prov:used ;
+    rdfs:label "입력"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:DataAsset .
+
+gai:hasOutput a owl:ObjectProperty ;
+    rdfs:label "산출"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:DataAsset .
+
+gai:assignedTo a owl:ObjectProperty ;
+    rdfs:subPropertyOf prov:wasAssociatedWith ;
+    rdfs:label "담당"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:Agent .
+
+gai:dependsOn a owl:ObjectProperty , owl:TransitiveProperty ;
+    rdfs:label "선행 작업"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:Task .
+
+gai:realizedBy a owl:ObjectProperty ;
+    rdfs:label "실행 작업"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:Job .
+
+gai:hasStatus a owl:ObjectProperty , owl:FunctionalProperty ;
+    rdfs:label "상태"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:TaskStatus .
+
+gai:hasCompletionCriterion a owl:ObjectProperty ;
+    rdfs:label "완료 기준"@ko ;
+    rdfs:domain gai:Task ;
+    rdfs:range gai:CompletionCriterion .
+
+gai:usesLabelScheme a owl:ObjectProperty ;
+    rdfs:label "사용 라벨 체계"@ko ;
+    rdfs:domain gai:LabelSet ;
+    rdfs:range gai:LabelScheme .
+
+gai:spatialExtent a owl:ObjectProperty ;
+    rdfs:label "공간 범위"@ko ;
+    rdfs:domain gai:DataAsset ;
+    rdfs:range geo:Geometry .
+
+gai:temporalExtent a owl:ObjectProperty ;
+    rdfs:label "시간 범위"@ko ;
+    rdfs:domain gai:DataAsset ;
+    rdfs:range time:TemporalEntity .
+
+# -----------------------------------------------------------------------------
+# 7. 데이터 속성
+# -----------------------------------------------------------------------------
+
+gai:storageUri a owl:DatatypeProperty ;
+    rdfs:label "저장 위치"@ko ;
+    rdfs:domain gai:DataAsset ;
+    rdfs:range xsd:anyURI .
+
+gai:crs a owl:DatatypeProperty ;
+    rdfs:label "좌표 참조 체계"@ko ;
+    rdfs:comment "EPSG 코드 문자열. 예: EPSG:5186"@ko ;
+    rdfs:domain gai:DataAsset ;
+    rdfs:range xsd:string .
+
+gai:groundSampleDistance a owl:DatatypeProperty ;
+    rdfs:label "지상 표본 거리"@ko ;
+    rdfs:comment "미터 단위 화소 크기."@ko ;
+    rdfs:domain gai:DataAsset ;
+    rdfs:range xsd:decimal .
+
+gai:metric a owl:DatatypeProperty ;
+    rdfs:label "지표"@ko ;
+    rdfs:domain gai:CompletionCriterion ;
+    rdfs:range xsd:string .
+
+gai:operator a owl:DatatypeProperty ;
+    rdfs:label "비교 연산자"@ko ;
+    rdfs:domain gai:CompletionCriterion ;
+    rdfs:range xsd:string .
+
+gai:threshold a owl:DatatypeProperty ;
+    rdfs:label "기준값"@ko ;
+    rdfs:domain gai:CompletionCriterion ;
+    rdfs:range xsd:decimal .

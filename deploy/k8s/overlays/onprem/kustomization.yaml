@@ -1,0 +1,27 @@
+# 운영 환경 오버레이: 외부 회사 서버(기술이전 대상)의 쿠버네티스
+# 실행 중 인터넷 의존 금지 규칙에 따라 모든 이미지를 사내(사설) 레지스트리에서 받는다.
+#   1) 아래 newName 의 registry.geoai.internal 을 실제 사설 레지스트리 주소로 바꾼다.
+#   2) 비밀은 배포 전에 운영자가 만든다 (README "운영 환경 배포" 참조). 저장소에 넣지 않는다.
+#   3) 분야 온톨로지는 domains.yaml 설정 맵에 *.ttl 을 넣어 주입한다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - domains.yaml
+images:
+  - name: geoai/studio-agent
+    newName: registry.geoai.internal/geoai/studio-agent
+    newTag: "0.1.0"
+  - name: nats
+    newName: registry.geoai.internal/mirror/nats
+    newTag: 2.10.22-alpine
+  - name: postgis/postgis
+    newName: registry.geoai.internal/mirror/postgis
+    newTag: 16-3.4
+  - name: chrislusf/seaweedfs
+    newName: registry.geoai.internal/mirror/seaweedfs
+    newTag: "3.80"
+patches:
+  - target: {kind: Deployment, name: studio-agent}
+    patch: |
+      - {op: replace, path: /spec/template/spec/containers/0/imagePullPolicy, value: Always}

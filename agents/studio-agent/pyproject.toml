@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "studio-agent"
+version = "0.1.0"
+description = "GeoAI Studio 대표 에이전트: Studio 작업 접수, 온톨로지 기반 하위 작업 계획·배정"
+requires-python = ">=3.12"
+dependencies = [
+    "geoai-common[nats,postgres]==0.1.0",
+    "fastapi==0.162.0",
+    "uvicorn==0.38.0",
+]
+
+[project.scripts]
+studio-agent = "studio_agent.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/studio_agent"]

@@ -1,0 +1,17 @@
+# 통합 시험·로컬 개발용 의존 서비스. 이미지 버전은 쿠버네티스 매니페스트와 같게 고정한다.
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: geoai
+      POSTGRES_PASSWORD: geoai
+      POSTGRES_DB: geoai
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geoai"]
+      interval: 2s
+      retries: 30
+  nats:
+    image: nats:2.10.22-alpine
+    command: ["-js", "-sd", "/data"]
+    ports: ["4222:4222"]

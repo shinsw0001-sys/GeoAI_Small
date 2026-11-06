@@ -1,0 +1,84 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix gais: <https://ontology.geoai.local/shapes#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# =============================================================================
+# GeoAI 핵심 형상 제약 (SHACL)
+# 에이전트가 메시지 본문을 RDF로 바꾼 뒤 이 제약으로 검증한다.
+# 온톨로지(geoai-core.ttl)는 "무엇이 있는가", 이 파일은 "요청이 갖춰야 할 것"을 정한다.
+# =============================================================================
+
+gais:TaskShape a sh:NodeShape ;
+    sh:targetClass gai:Task ;
+    rdfs:comment "모든 작업 요청은 분야 1개와 입력 자산 1개 이상을 가진다."@ko ;
+    sh:property [
+        sh:path gai:inDomain ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:class gai:Domain ;
+        sh:message "작업은 등록된 분야(gai:Domain) 하나를 지정해야 합니다."@ko ;
+    ] ;
+    sh:property [
+        sh:path gai:hasInput ;
+        sh:minCount 1 ;
+        sh:class gai:DataAsset ;
+        sh:message "작업은 데이터 자산(gai:DataAsset) 입력이 하나 이상 있어야 합니다."@ko ;
+    ] ;
+    sh:property [
+        sh:path gai:inProject ;
+        sh:maxCount 1 ;
+        sh:class gai:Project ;
+    ] ;
+    sh:property [
+        sh:path gai:hasCompletionCriterion ;
+        sh:class gai:CompletionCriterion ;
+    ] .
+
+gais:DataAssetShape a sh:NodeShape ;
+    sh:targetClass gai:DataAsset ;
+    sh:property [
+        sh:path gai:storageUri ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:datatype xsd:anyURI ;
+        sh:message "데이터 자산은 저장 위치(gai:storageUri) 하나를 가져야 합니다."@ko ;
+    ] ;
+    sh:property [
+        sh:path gai:crs ;
+        sh:maxCount 1 ;
+        sh:pattern "^EPSG:[0-9]+$" ;
+        sh:message "좌표 참조 체계는 'EPSG:<코드>' 형식이어야 합니다."@ko ;
+    ] ;
+    sh:property [
+        sh:path gai:groundSampleDistance ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minExclusive 0 ;
+    ] .
+
+gais:RawDataShape a sh:NodeShape ;
+    sh:targetClass gai:RawData ;
+    sh:property [
+        sh:path gai:crs ;
+        sh:minCount 1 ;
+        sh:message "원본 데이터는 좌표 참조 체계(gai:crs)를 반드시 밝혀야 합니다."@ko ;
+    ] .
+
+gais:CompletionCriterionShape a sh:NodeShape ;
+    sh:targetClass gai:CompletionCriterion ;
+    sh:property [
+        sh:path gai:metric ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+    ] ;
+    sh:property [
+        sh:path gai:operator ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:in ( ">=" "<=" ">" "<" "==" ) ;
+        sh:message "비교 연산자는 >=, <=, >, <, == 중 하나여야 합니다."@ko ;
+    ] ;
+    sh:property [
+        sh:path gai:threshold ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:datatype xsd:decimal ;
+    ] .

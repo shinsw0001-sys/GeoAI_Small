@@ -1,0 +1,17 @@
+# 저장소 공통 개발 도구 설정. 패키지는 libs/, agents/ 아래에 각각 있다.
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["libs/geoai-common/tests", "agents/studio-agent/tests"]
+markers = [
+    "integration: PostgreSQL·NATS 가 필요한 통합 시험 (GEOAI_TEST_DATABASE_URL, GEOAI_TEST_NATS_URL)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "BLE"]
+ignore = ["S101"]
