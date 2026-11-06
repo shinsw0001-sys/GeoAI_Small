@@ -1,0 +1,24 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix dom:  <https://ontology.geoai.local/domain/building-extraction#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# 1년차 분야: 건물 추출
+
+<https://ontology.geoai.local/domain/building-extraction>
+    a owl:Ontology ;
+    owl:imports <https://ontology.geoai.local/core> ;
+    owl:versionInfo "0.1.0" .
+
+dom:Domain a gai:Domain ;
+    rdfs:label "건물 추출"@ko .
+
+dom:Labels a gai:LabelScheme ;
+    rdfs:label "건물 추출 라벨 체계"@ko .
+
+dom:Building a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "건물"@ko ;
+    skos:definition "지붕 윤곽으로 구분되는 건축물 객체. 다각형으로 라벨링한다."@ko ;
+    gai:dtCorrespondsTo "Building" .

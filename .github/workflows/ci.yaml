@@ -1,0 +1,64 @@
+# 지속적 통합: 정적 검사, 단위 시험, PostgreSQL·NATS 통합 시험, 매니페스트 검증, 이미지 빌드
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env: {POSTGRES_USER: geoai, POSTGRES_PASSWORD: geoai, POSTGRES_DB: geoai}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U geoai" --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: NATS JetStream 기동
+        run: docker run -d --name nats -p 4222:4222 nats:2.10.22-alpine -js
+      - name: 의존성 설치
+        run: |
+          python -m pip install --require-hashes -r agents/studio-agent/requirements.lock
+          python -m pip install --no-deps -e libs/geoai-common -e agents/studio-agent
+          python -m pip install pytest==9.2.0 pytest-asyncio==1.4.1.post1 httpx==0.28.1 ruff==0.17.4
+      - name: 정적 검사
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: 메시지 JSON Schema 산출본 일치
+        run: python -m geoai_common.messages schemas && git diff --exit-code schemas/
+      - name: 시험 (단위 + 통합)
+        env:
+          GEOAI_TEST_DATABASE_URL: postgresql://geoai:geoai@localhost:5432/geoai
+          GEOAI_TEST_NATS_URL: nats://localhost:4222
+        run: pytest -q
+
+  manifests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Kustomize 설치 (버전 고정)
+        run: |
+          curl -sSL -o k.tgz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
+          tar -xzf k.tgz && sudo mv kustomize /usr/local/bin/
+      - name: 매니페스트 생성·스키마 검증
+        run: |
+          python -m pip install kubernetes-validate==1.31.0
+          for o in dev onprem; do
+            kustomize build deploy/k8s/overlays/$o > /tmp/$o.yaml
+            kubernetes-validate -k 1.31.0 --strict /tmp/$o.yaml
+          done
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Studio Agent 이미지 빌드
+        run: docker build -f agents/studio-agent/Dockerfile -t geoai/studio-agent:ci .

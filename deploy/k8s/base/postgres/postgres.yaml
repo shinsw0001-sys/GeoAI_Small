@@ -1,0 +1,55 @@
+# 프로젝트 상태 저장소: PostgreSQL 16 + PostGIS 3.4
+# 골격은 단일 상태 유지 집합(StatefulSet)이다. 백업·복구·이중화는 데이터베이스 오퍼레이터 도입 단계에서 바꾼다.
+# 비밀(Secret) geoai-postgres 는 오버레이가 만든다 (키: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: geoai-data
+  labels: {app.kubernetes.io/name: postgres}
+spec:
+  selector: {app.kubernetes.io/name: postgres}
+  ports:
+    - {name: postgres, port: 5432, targetPort: postgres}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: geoai-data
+  labels: {app.kubernetes.io/name: postgres, app.kubernetes.io/part-of: geoai}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: postgres}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: postgres, app.kubernetes.io/part-of: geoai}
+    spec:
+      containers:
+        - name: postgres
+          image: postgis/postgis:16-3.4
+          envFrom:
+            - secretRef: {name: geoai-postgres}
+          env:
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports:
+            - {name: postgres, containerPort: 5432}
+          readinessProbe:
+            exec: {command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]}
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 20Gi}

@@ -1,0 +1,33 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix dom:  <https://ontology.geoai.local/domain/CHANGE-ME#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# 분야 온톨로지 서식. CHANGE-ME 를 분야 식별자로 바꾼다.
+
+<https://ontology.geoai.local/domain/CHANGE-ME>
+    a owl:Ontology ;
+    owl:imports <https://ontology.geoai.local/core> ;
+    owl:versionInfo "0.1.0" .
+
+# 1) 분야 개체 (필수)
+dom:Domain a gai:Domain ;
+    rdfs:label "분야 이름"@ko .
+
+# 2) 라벨 체계 (선택)
+dom:Labels a gai:LabelScheme ;
+    rdfs:label "분야 라벨 체계"@ko .
+
+dom:ExampleClass a skos:Concept ;
+    skos:inScheme dom:Labels ;
+    skos:prefLabel "라벨 이름"@ko ;
+    gai:dtCorrespondsTo "확장 접점: 디지털 트윈 객체 유형 이름" .
+
+# 3) 분야 전용 작업 (선택). 세 계획 속성을 모두 선언한다.
+# dom:ExampleTask a owl:Class ;
+#     rdfs:subClassOf gai:StudioTask ;
+#     rdfs:label "분야 전용 작업"@ko ;
+#     gai:requiresInputType gai:OrthoImage ;
+#     gai:producesOutputType gai:ResultProduct ;
+#     gai:handledBy gai:AnalysisEvaluationAgent .

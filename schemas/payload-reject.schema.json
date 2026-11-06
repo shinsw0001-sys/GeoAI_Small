@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "Violation": {
+      "additionalProperties": false,
+      "properties": {
+        "focus": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Focus"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "Violation",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "performative=reject 본문.",
+  "properties": {
+    "reason": {
+      "description": "거절 사유 코드. 예: invalid_task_type, shape_violation, unplannable",
+      "title": "Reason",
+      "type": "string"
+    },
+    "detail": {
+      "default": "",
+      "title": "Detail",
+      "type": "string"
+    },
+    "violations": {
+      "items": {
+        "$ref": "#/$defs/Violation"
+      },
+      "title": "Violations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "reason"
+  ],
+  "title": "RejectPayload",
+  "type": "object"
+}

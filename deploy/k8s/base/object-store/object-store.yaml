@@ -1,0 +1,66 @@
+# 데이터·모델 저장소: S3 호환 객체 저장소 (SeaweedFS, Apache-2.0)
+# 에이전트와 실행 작업은 S3 API(포트 8333)만 쓰므로 다른 S3 호환 제품으로 바꿔도 코드는 그대로다.
+# 비밀(Secret) geoai-object-store 는 오버레이가 만든다 (키: s3.json = SeaweedFS S3 신원 설정).
+# 대용량 원본은 이미지가 아닌 이 볼륨에 둔다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: object-store
+  namespace: geoai-data
+  labels: {app.kubernetes.io/name: object-store}
+spec:
+  selector: {app.kubernetes.io/name: object-store}
+  ports:
+    - {name: s3, port: 8333, targetPort: s3}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: object-store
+  namespace: geoai-data
+  labels: {app.kubernetes.io/name: object-store, app.kubernetes.io/part-of: geoai}
+spec:
+  serviceName: object-store
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: object-store}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: object-store, app.kubernetes.io/part-of: geoai}
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:3.80
+          args:
+            - server
+            - -dir=/data
+            - -ip.bind=0.0.0.0
+            - -s3
+            - -s3.port=8333
+            - -s3.config=/etc/seaweedfs/s3.json
+          ports:
+            - {name: s3, containerPort: 8333}
+          readinessProbe:
+            # 마스터 선출 후 S3 API 가 열리기까지 약 20~30초 걸린다.
+            tcpSocket: {port: s3}
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: s3}
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: s3-config, mountPath: /etc/seaweedfs, readOnly: true}
+      volumes:
+        - name: s3-config
+          secret: {secretName: geoai-object-store}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 100Gi}

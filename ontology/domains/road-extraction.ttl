@@ -1,0 +1,24 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix dom:  <https://ontology.geoai.local/domain/road-extraction#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# 1년차 분야: 도로 추출
+
+<https://ontology.geoai.local/domain/road-extraction>
+    a owl:Ontology ;
+    owl:imports <https://ontology.geoai.local/core> ;
+    owl:versionInfo "0.1.0" .
+
+dom:Domain a gai:Domain ;
+    rdfs:label "도로 추출"@ko .
+
+dom:Labels a gai:LabelScheme ;
+    rdfs:label "도로 추출 라벨 체계"@ko .
+
+dom:Road a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "도로"@ko ;
+    skos:definition "차량 통행 노면. 면(다각형) 또는 중심선으로 라벨링한다."@ko ;
+    gai:dtCorrespondsTo "Road" .

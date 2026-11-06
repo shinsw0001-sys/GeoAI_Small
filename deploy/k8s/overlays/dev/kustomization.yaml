@@ -1,0 +1,35 @@
+# 개발·시험 환경 오버레이 (로컬 kind 클러스터 등)
+# - 복제본 1개, 시험용 비밀번호, 예시 분야 온톨로지 주입
+# - 비밀번호는 시험 전용이다. 운영 환경에는 onprem 오버레이를 쓴다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target: {kind: Deployment, name: studio-agent}
+    patch: |
+      - {op: replace, path: /spec/replicas, value: 1}
+  - target: {kind: StatefulSet}
+    patch: |
+      - {op: replace, path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage, value: 1Gi}
+configMapGenerator:
+  - name: geoai-domains
+    namespace: geoai
+    files:
+      - domains/example-domain.ttl
+secretGenerator:
+  - name: geoai-postgres
+    namespace: geoai-data
+    literals:
+      - POSTGRES_USER=geoai
+      - POSTGRES_PASSWORD=geoai-dev
+      - POSTGRES_DB=geoai
+  - name: geoai-studio-agent
+    namespace: geoai
+    literals:
+      - database-url=postgresql://geoai:geoai-dev@postgres.geoai-data.svc.cluster.local:5432/geoai
+  - name: geoai-object-store
+    namespace: geoai-data
+    literals:
+      - >-
+        s3.json={"identities":[{"name":"geoai","credentials":[{"accessKey":"geoai","secretKey":"geoai-dev-secret"}],"actions":["Admin","Read","Write","List","Tagging"]}]}

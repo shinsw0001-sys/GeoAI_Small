@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "CompletionCriterion": {
+      "additionalProperties": false,
+      "properties": {
+        "metric": {
+          "description": "예: mIoU, F1",
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "operator": {
+          "description": ">=, <=, >, <, == 중 하나",
+          "title": "Operator",
+          "type": "string"
+        },
+        "threshold": {
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "metric",
+        "operator",
+        "threshold"
+      ],
+      "title": "CompletionCriterion",
+      "type": "object"
+    },
+    "DataAssetRef": {
+      "additionalProperties": false,
+      "description": "데이터·모델 저장소의 자산 참조.",
+      "properties": {
+        "asset_id": {
+          "minLength": 1,
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "asset_type": {
+          "description": "데이터 자산 클래스 IRI (gai:DataAsset 하위)",
+          "format": "uri",
+          "minLength": 1,
+          "title": "Asset Type",
+          "type": "string"
+        },
+        "storage_uri": {
+          "description": "예: s3://raw/site-a/ortho.tif",
+          "minLength": 1,
+          "title": "Storage Uri",
+          "type": "string"
+        },
+        "crs": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "예: EPSG:5186",
+          "title": "Crs"
+        },
+        "ground_sample_distance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "미터 단위",
+          "title": "Ground Sample Distance"
+        }
+      },
+      "required": [
+        "asset_id",
+        "asset_type",
+        "storage_uri"
+      ],
+      "title": "DataAssetRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "performative=request 본문.",
+  "properties": {
+    "domain": {
+      "description": "분야 개체 IRI (gai:Domain)",
+      "format": "uri",
+      "minLength": 1,
+      "title": "Domain",
+      "type": "string"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/DataAssetRef"
+      },
+      "minItems": 1,
+      "title": "Inputs",
+      "type": "array"
+    },
+    "completion_criteria": {
+      "items": {
+        "$ref": "#/$defs/CompletionCriterion"
+      },
+      "title": "Completion Criteria",
+      "type": "array"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "title": "Parameters",
+      "type": "object"
+    }
+  },
+  "required": [
+    "domain",
+    "inputs"
+  ],
+  "title": "TaskRequestPayload",
+  "type": "object"
+}

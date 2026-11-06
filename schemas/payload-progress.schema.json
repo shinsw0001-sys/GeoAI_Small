@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "description": "작업 상태 이름 (gai:TaskStatus 개체 지역명)",
+      "title": "Status",
+      "type": "string"
+    },
+    "percent": {
+      "anyOf": [
+        {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Percent"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "ProgressPayload",
+  "type": "object"
+}
