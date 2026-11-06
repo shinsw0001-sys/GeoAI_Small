@@ -15,7 +15,11 @@ const METRIC_KO = {
   pixel_accuracy: "화소 정확도",
   foreground_IoU: "변화 여부 IoU", foreground_F1: "변화 여부 F1",
   foreground_precision: "변화 여부 정밀도", foreground_recall: "변화 여부 재현율",
+  APLS: "APLS (경로 길이 유사도)", connectivity: "경로 연결 비율",
+  completeness: "중심선 완전성", correctness: "중심선 정확성", quality: "중심선 품질",
+  reference_km: "참조 도로 길이(km)", predicted_km: "예측 도로 길이(km)",
 };
+
 /* 지표 이름: 개념이 하나면 그 개념 이름을, 여럿이면 "개념 평균"을 붙인다. */
 function metricLabel(key, domainIri) {
   const d = catalog && catalog.domains.find((x) => x.iri === domainIri);
@@ -166,7 +170,9 @@ async function newTask() {
   const targets = cat.task_types.filter((t) => ["EvaluationTask", "ModelTrainingTask", "LabelingTask", "PreprocessingTask", "GeoDataProductionTask"].includes(t.task_type.split("#")[1]));
   const evalTask = targets.find((t) => t.task_type.endsWith("#EvaluationTask"));
   const sample = assets.vectors.find((v) => v.uri.includes("sample/"));
-  const preset = (assets.presets || [])[0];
+  const preset = (assets.presets || []).find((p) => p.acquisitions);
+  const presetFor = (iri) => (assets.presets || []).find((p) => p.domain === iri && p.image);
+  const baseImage = (assets.images.find((a) => a.uri.includes("/sample/")) || assets.images[0] || {}).uri;
   const opt = (list, chosen, none) => `${none ? `<option value="">${esc(none)}</option>` : ""}${list.map((x) => `<option value="${esc(x.uri)}" ${x.uri === chosen ? "selected" : ""}>${shortName(x.uri)}</option>`).join("")}`;
   const acqCard = (i) => {
     const p = (preset && preset.acquisitions[i]) || {};
@@ -198,12 +204,12 @@ async function newTask() {
         <div class="hint">${buildingModels.length ? "건물 추출 모델의 영상 특징을 시점마다 옮겨 심고 학습을 시작합니다." : "학습된 건물 추출 모델이 없습니다. 건물 추출 작업을 먼저 돌리면 여기서 고를 수 있습니다."}</div></div></div>
       <div class="row" id="f-single-images"><span class="k">입력 영상</span><div>
         <div class="choices" id="f-images">${assets.images.length ? assets.images.map((a, i) => `
-          <label class="choice"><input type="checkbox" name="image" value="${esc(a.uri)}" ${i === 0 ? "checked" : ""} ${a.error ? "disabled" : ""}>
+          <label class="choice"><input type="checkbox" name="image" value="${esc(a.uri)}" ${a.uri === baseImage ? "checked" : ""} ${a.error ? "disabled" : ""}>
           <span><span class="mono">${shortName(a.uri)}</span><br><small class="muted">${a.error ? esc(a.error) : `${esc(a.crs)} · ${fmt(a.ground_sample_distance, 2)} m · ${a.width}×${a.height}`}</small></span></label>`).join("")
           : `<div class="empty">등록된 영상이 없습니다. <a href="#/data">원본 자료</a>에서 올리세요.</div>`}</div></div></div>
       <div class="row" id="f-single-labels"><label class="k" for="f-labels">참조 벡터 (라벨 원천)</label><div>
         <select id="f-labels"><option value="">선택 안 함</option>${assets.vectors.map((v) => `<option value="${esc(v.uri)}" ${v === sample ? "selected" : ""}>${shortName(v.uri)}</option>`).join("")}</select>
-        <div class="hint">건물 윤곽 GeoJSON. 라벨링 단계에서 타일마다 마스크로 바꿉니다.</div></div></div>
+        <div class="hint" id="f-labels-hint">건물 윤곽 GeoJSON. 라벨링 단계에서 타일마다 마스크로 바꿉니다.</div></div></div>
       <div class="row"><span class="k">완료 기준</span><div><div id="f-criteria"></div>
         <button type="button" class="ghost small" id="f-add-crit">기준 추가</button>
         <div class="hint">비워 두면 분야 온톨로지의 권장 기준을 씁니다. 미달이면 빨간색으로 알립니다.</div></div></div>
@@ -244,6 +250,18 @@ async function newTask() {
     $("#f-single-labels").hidden = multi;
     const proj = $("#f-project");
     if (proj.value === lastSlug) { lastSlug = domainSlug(d.iri); proj.value = lastSlug; }
+    if (!multi) {
+      const linear = d.label_geometry === "LineString";
+      $("#f-labels-hint").textContent = linear
+        ? "도로 중심선 GeoJSON(선, 속성 width_m = 도로 폭 m). 폭만큼 넓혀 노면 마스크를 만들고, 중심선은 연결성 평가의 참조 도로망이 됩니다. 노면 다각형도 받습니다."
+        : "건물 윤곽 GeoJSON. 라벨링 단계에서 타일마다 마스크로 바꿉니다.";
+      // 분야 표본이 있으면 그 영상·벡터를, 없으면 기본 표본을 고른다
+      const p = presetFor(d.iri);
+      const img = p ? p.image : baseImage;
+      view.querySelectorAll("input[name=image]").forEach((i) => { i.checked = i.value === img; });
+      const vec = p ? p.label_source : (sample && sample.uri);
+      if (vec && [...$("#f-labels").options].some((o) => o.value === vec)) $("#f-labels").value = vec;
+    }
   };
   const syncPlan = () => {
     const local = $("#f-target").value.split("#")[1];
@@ -346,6 +364,36 @@ function criteriaTable(criteria, finished, domainIri) {
   </tbody></table>`;
 }
 
+/* 도로 추출: 도로망 미리보기, 위상 평가, 라벨 품질 */
+const CENTER_RGB = "rgb(44,72,140)";
+function roadPreview(rep) {
+  return `<div class="card preview"><h2>도로망 미리보기</h2>
+    <img src="${objUrl(rep.preview_uri)}" alt="시험 타일 위에 예측 노면(호박색), 예측 중심선(남색), 참조 중심선(청록색)을 겹친 영상">
+    <div class="legend"><span><i style="background:#e0a030"></i>예측 노면</span><span><i style="background:${CENTER_RGB}"></i>예측 중심선</span><span><i style="background:var(--teal)"></i>참조 중심선</span></div></div>`;
+}
+function roadNetworkCard(rep) {
+  const n = rep.network || {};
+  const r = n.reference || {}, p = n.predicted || {};
+  const m = rep.metrics || {};
+  const row = (k, a, b) => `<tr><td>${esc(k)}</td><td class="num">${fmt(a)}</td><td class="num">${fmt(b)}</td></tr>`;
+  return `<div class="card" style="margin-top:16px"><h2>도로망 위상 평가 <small class="muted">(시험 범위 모자이크)</small></h2>
+    <div class="grid cols-2">
+      <div><div class="table-wrap"><table><thead><tr><th>항목</th><th class="num">참조</th><th class="num">예측</th></tr></thead><tbody>
+        ${row("도로 길이(km)", r.length_km, p.length_km)}${row("교차점", r.junctions, p.junctions)}
+        ${row("막다른 끝", r.dead_ends, p.dead_ends)}${row("연결 요소(끊긴 덩어리)", r.components, p.components)}
+      </tbody></table></div></div>
+      <div><div class="metrics">
+        <div class="metric"><div class="k">APLS 참조→예측</div><div class="v">${fmt(m.APLS_ref_to_pred)}</div></div>
+        <div class="metric"><div class="k">APLS 예측→참조</div><div class="v">${fmt(m.APLS_pred_to_ref)}</div></div>
+      </div>
+      <div class="muted" style="margin-top:8px">참조→예측이 낮으면 놓치거나 끊긴 도로, 예측→참조가 낮으면 없는 도로를 잇거나 덧붙인 것입니다. 경로 쌍 ${n.apls_pairs ?? "—"}개.</div></div>
+    </div>
+    <div class="muted" style="margin-top:8px">참조망: ${n.reference_source === "centerline" ? "라벨 중심선" : "정답 마스크 골격"} · 버퍼 ${fmt((n.parameters || {}).buffer_m, 1)} m · 제어 노드 간격 ${fmt((n.parameters || {}).apls_spacing_m, 0)} m · 잔가지 제거 ${(n.pruned || {}).spurs ?? 0}개, 작은 조각 제거 ${(n.pruned || {}).fragments ?? 0}개 · 예측 중심선은 단계별 결과의 road_network.geojson</div></div>`;
+}
+function roadLabelLine(q) {
+  return `<div class="muted" style="margin-top:8px">라벨 품질: 중심선 ${q.lines}개 · ${fmt(q.centerline_km, 2)} km · 교차점 ${q.junctions} · 막다른 끝 ${q.dead_ends} · 끝점 맞춤 ${q.snapped_endpoints} · 폭 속성 ${q.width_from_attribute}/${q.lines}${q.surfaces ? ` · 노면 다각형 ${q.surfaces}개` : ""} · 노면 화소 비율 ${fmt(q.positive_pixel_ratio)}</div>`;
+}
+
 async function taskDetail(id) {
   const draw = async () => {
     const [d, o] = await Promise.all([api(`/api/tasks/${encodeURIComponent(id)}`), api("/api/overview")]);
@@ -364,7 +412,9 @@ async function taskDetail(id) {
     const lidarDates = [...new Set(d.inputs.filter((a) => a.asset_type === GAI + "LidarPointCloud").map((a) => a.acquired_at))];
     const inputDates = [...new Set(d.inputs.map((a) => a.acquired_at).filter(Boolean))].sort();
     const shownDates = dates.length ? dates : inputDates;
-    const metricKeys = multiClass ? ["foreground_F1", "foreground_IoU", "IoU", "F1", "object_F1", "mIoU"] : ["IoU", "F1", "precision", "recall", "object_F1", "mIoU"];
+    const road = !!rep && rep.kind === "road-network-evaluation";
+    const metricKeys = road ? ["IoU", "F1", "APLS", "connectivity", "completeness", "correctness", "quality"]
+      : multiClass ? ["foreground_F1", "foreground_IoU", "IoU", "F1", "object_F1", "mIoU"] : ["IoU", "F1", "precision", "recall", "object_F1", "mIoU"];
     view.innerHTML = `
       <div class="page-head">
         <div><div class="muted"><a href="#/">현황</a> / 작업</div>
@@ -393,11 +443,12 @@ async function taskDetail(id) {
         <div class="card"><h2>성능 지표 ${rep ? `<small class="muted">(${rep.split === "test" ? "시험" : "검증"} 집합 ${rep.tiles}장)</small>` : ""}</h2>
           ${metrics && Object.keys(metrics).length ? `<div class="metrics">${metricKeys.filter((k) => k in metrics).map((k) => `
             <div class="metric"><div class="k">${esc(metricLabel(k, dom))}</div><div class="v">${fmt(metrics[k])}</div></div>`).join("")}</div>
-            ${rep ? `<div class="muted" style="margin-top:8px">객체: 예측 ${rep.objects.predicted} · 정답 ${rep.objects.reference} · 대응 ${rep.objects.matched} (IoU ≥ ${rep.objects.iou_threshold})</div>` : ""}`
+            ${rep && rep.objects ? `<div class="muted" style="margin-top:8px">객체: 예측 ${rep.objects.predicted} · 정답 ${rep.objects.reference} · 대응 ${rep.objects.matched} (IoU ≥ ${rep.objects.iou_threshold})</div>` : ""}
+            ${road ? `<div class="muted" style="margin-top:8px">IoU·F1은 노면 화소, 나머지는 중심선 도로망 기준입니다. APLS·경로 연결 비율이 낮으면 도로가 중간에 끊긴 것입니다.</div>` : ""}`
           : `<div class="muted">평가 단계가 끝나면 표시됩니다.</div>`}</div>
       </div>
       ${rep || model ? `<div class="grid cols-2" style="margin-top:16px">
-        ${rep ? (multiClass ? `<div class="card preview"><h2>변화 지도 미리보기</h2>
+        ${rep ? (road ? roadPreview(rep) : multiClass ? `<div class="card preview"><h2>변화 지도 미리보기</h2>
           ${rep.preview_layout === "pair" ? `<div class="muted" style="margin-bottom:6px">타일마다 왼쪽 ${esc((rep.acquisitions || [])[0] || "이전")} · 오른쪽 ${esc((rep.acquisitions || []).slice(-1)[0] || "이후")} + 변화</div>` : ""}
           <img src="${objUrl(rep.preview_uri)}" alt="시험 타일 위에 예측 변화(색 채움)와 정답 변화(같은 색 윤곽)를 겹친 영상">
           <div class="legend">${classes.map((c) => `<span><i style="background:${rgb(c.color)}"></i>${esc(c.label)}</span>`).join("")}<span class="muted">채움 = 예측, 윤곽 = 정답</span></div></div>`
@@ -407,6 +458,7 @@ async function taskDetail(id) {
           <div class="muted" style="margin-top:6px">최고 검증 IoU ${fmt(model.val_IoU)} (세대 ${model.best_epoch}) · 매개변수 ${(model.parameters / 1e6).toFixed(2)}M · 입력 ${(model.bands || []).length || 3}밴드 · ${esc(model.device)} · ${fmt(model.train_seconds, 0)}초</div>
           ${model.pretrained ? `<div class="muted">초기 가중치: ${String(model.pretrained.domain || "").includes("building-extraction") ? "건물 추출 모델" : "사전 학습 모델"} · 옮긴 층 ${model.pretrained.copied + model.pretrained.adapted}/${model.pretrained.total} (첫 층 시점별 분배 ${model.pretrained.adapted})</div>` : ""}</div>` : ""}
       </div>` : ""}
+      ${road ? roadNetworkCard(rep) : ""}
       ${multiClass ? `<div class="card" style="margin-top:16px"><h2>변화 유형별 결과</h2><div class="table-wrap"><table>
         <thead><tr><th>유형</th><th class="num">IoU</th><th class="num">F1</th><th class="num">예측 면적(m²)</th><th class="num">정답 면적(m²)</th><th class="num">객체 대응/예측/정답</th></tr></thead>
         <tbody>${classes.map((c) => `<tr><td><i class="swatch" style="background:${rgb(c.color)}"></i>${esc(c.label)}</td>
@@ -419,7 +471,7 @@ async function taskDetail(id) {
           <td class="mono">${Object.entries(s.metrics).slice(0, 5).map(([k, v]) => `${esc(k)} ${fmt(v)}`).join(" · ") || "—"}</td>
           <td class="files">${s.outputs.map((a) => `<a href="${objUrl(a.storage_uri)}" target="_blank" rel="noopener">${shortName(a.storage_uri)}</a>`).join("") || "—"}</td></tr>`).join("")}
         </tbody></table></div>
-        ${d.artifacts.labels ? `<div class="muted" style="margin-top:8px">라벨 품질: 지물 ${d.artifacts.labels.quality.features}개 · 기하 수정 ${d.artifacts.labels.quality.fixed_invalid}개 · 라벨 화소 비율 ${fmt(d.artifacts.labels.quality.positive_pixel_ratio)}${d.artifacts.labels.quality.change_polygons ? ` · 도출 변화 ${Object.entries(d.artifacts.labels.quality.change_polygons).map(([k, v]) => `${esc(conceptLabel(dom, k))} ${v}`).join(", ")}` : ""}</div>` : ""}
+        ${d.artifacts.labels && d.artifacts.labels.label_geometry === "LineString" ? roadLabelLine(d.artifacts.labels.quality) : d.artifacts.labels ? `<div class="muted" style="margin-top:8px">라벨 품질: 지물 ${d.artifacts.labels.quality.features}개 · 기하 수정 ${d.artifacts.labels.quality.fixed_invalid}개 · 라벨 화소 비율 ${fmt(d.artifacts.labels.quality.positive_pixel_ratio)}${d.artifacts.labels.quality.change_polygons ? ` · 도출 변화 ${Object.entries(d.artifacts.labels.quality.change_polygons).map(([k, v]) => `${esc(conceptLabel(dom, k))} ${v}`).join(", ")}` : ""}</div>` : ""}
         ${d.artifacts.ard ? `<div class="muted">타일 ${d.artifacts.ard.tile_size}px · 학습 ${d.artifacts.ard.split_counts.train} / 검증 ${d.artifacts.ard.split_counts.val} / 시험 ${d.artifacts.ard.split_counts.test}</div>` : ""}
       </div>
       <div class="card" style="margin-top:16px"><details><summary>메시지 기록 ${d.timeline.length}건</summary>
@@ -442,7 +494,7 @@ async function dataView() {
     <div class="card"><h2>자료 올리기</h2>
       <form id="up-form" class="inline"><input type="file" id="up-file" accept=".tif,.tiff,.geojson,.json,.las" required>
       <button class="primary" type="submit">올리기</button></form>
-      <div class="hint muted" style="margin-top:6px">GeoTIFF(좌표 참조 체계 포함, 3밴드 이상), 라이다 LAS, 건물 윤곽·토지피복 GeoJSON. 다시기 분야는 새 작업 화면에서 시점별 취득 일자를 지정합니다.</div></div>
+      <div class="hint muted" style="margin-top:6px">GeoTIFF(좌표 참조 체계 포함, 3밴드 이상), 라이다 LAS, 건물 윤곽·토지피복·도로 중심선 GeoJSON. 다시기 분야는 새 작업 화면에서 시점별 취득 일자를 지정합니다.</div></div>
     <div class="card"><h2>영상 ${assets.images.length}건</h2>
       ${assets.images.length ? `<div class="table-wrap"><table><thead><tr><th>주소</th><th>좌표 참조 체계</th><th class="num">해상도(m)</th><th class="num">크기</th></tr></thead><tbody>
       ${assets.images.map((a) => `<tr><td class="mono">${esc(a.uri)}</td><td>${a.error ? `<span class="verdict-bad">${esc(a.error)}</span>` : esc(a.crs)}</td>

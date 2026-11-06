@@ -82,7 +82,9 @@ async def test_accept_run_and_report(onto, tmp_path):
     spec = runner.specs[0]
     assert spec.entrypoint == "tiling" and spec.job_type.endswith("#TilingJob")
     assert spec.output_prefix == "s3://processed/p1/T1.s1"
-    assert spec.label_classes == [{"iri": DOMAIN.replace("Domain", "Building"), "label": "건물", "value": 1}]
+    assert spec.label_classes == [
+        {"iri": DOMAIN.replace("Domain", "Building"), "label": "건물", "value": 1, "geometry": "Polygon"}
+    ]
     assert spec.parameters == {"tile_size": 256}
     perfs = [e.performative for e in inbox]
     assert perfs[0] is Performative.ACCEPT and perfs[-1] is Performative.RESULT
@@ -193,3 +195,40 @@ async def test_change_labels_parameters(onto, tmp_path):
     await agent.wait_idle()
     assert runner.specs[0].entrypoint == "change-labels"
     assert [c["value"] for c in runner.specs[0].label_classes] == [1, 2, 3, 4]
+
+
+RD = "https://ontology.geoai.local/domain/road-extraction#Domain"
+
+
+async def test_road_labels_and_evaluation_jobs(onto, tmp_path):
+    _, agent, runner, objects, _ = await make(onto, tmp_path, agent_id="model-training-agent")
+    ard = {"asset_id": "a", "asset_type": str(GAI.AnalysisReadyData), "storage_uri": "s3://processed/p1/m.json"}
+    objects.put_bytes(ard["storage_uri"], b"{}")
+    e = request("LabelingTask", [ard])
+    e.payload["domain"] = RD
+    reply = await agent.handle(e)
+    assert reply.payload["reason"] == "missing_parameter" and "도로 중심선" in reply.payload["detail"]
+    objects.put_bytes("s3://raw/roads.geojson", b"{}")
+    e = request("LabelingTask", [ard], label_source="s3://raw/roads.geojson")
+    e.payload["domain"] = RD
+    reply = await agent.handle(e)
+    assert reply.performative is Performative.ACCEPT
+    await agent.wait_idle()
+    spec = runner.specs[0]
+    assert spec.entrypoint == "road-labels"
+    assert spec.label_classes == [
+        {"iri": RD.replace("Domain", "Road"), "label": "도로", "value": 1, "geometry": "LineString"}
+    ]
+
+    _, agent, runner, objects, _ = await make(onto, tmp_path, agent_id="analysis-evaluation-agent")
+    inputs = [
+        {"asset_id": "m", "asset_type": str(GAI.Model), "storage_uri": "s3://models/p1/model.json"},
+        {"asset_id": "l", "asset_type": str(GAI.LabelSet), "storage_uri": "s3://labels/p1/manifest.json"},
+    ]
+    for a in inputs:
+        objects.put_bytes(a["storage_uri"], b"{}")
+    e = request("EvaluationTask", inputs)
+    e.payload["domain"] = RD
+    assert (await agent.handle(e)).performative is Performative.ACCEPT
+    await agent.wait_idle()
+    assert runner.specs[0].entrypoint == "road-evaluate"

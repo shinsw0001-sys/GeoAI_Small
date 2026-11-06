@@ -50,6 +50,7 @@ OUTPUT_BUCKETS = [
 # 실행 작업별 필수 매개변수. 진입점 이름 → [(매개변수 후보, 설명)]. 후보 중 하나만 있으면 된다.
 REQUIRED_PARAMETERS: dict[str, list[tuple[tuple[str, ...], str]]] = {
     "rasterize-labels": [(("label_source",), "참조 벡터(GeoJSON) 저장소 주소")],
+    "road-labels": [(("label_source",), "도로 중심선(LineString, 폭 속성) 또는 노면 벡터(GeoJSON) 저장소 주소")],
     "change-labels": [
         (
             ("label_sources", "label_source"),
@@ -194,7 +195,7 @@ class SpecialistAgent(BaseAgent):
             project_id=envelope.project_id,
             domain=str(request.domain),
             label_classes=[
-                {"iri": c.iri, "label": c.label, "value": c.value}
+                {"iri": c.iri, "label": c.label, "value": c.value, "geometry": c.geometry}
                 for c in self.ontology.label_concepts(str(request.domain))
             ],
             inputs=request.inputs,

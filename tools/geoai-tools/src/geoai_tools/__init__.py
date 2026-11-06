@@ -1,6 +1,6 @@
 """GeoAI 처리 도구. 진입점 이름은 온톨로지의 gai:toolEntrypoint 값과 같다."""
 
-from . import change_labels, evaluate, ingest, labels, multitemporal, tiling, train
+from . import change_labels, evaluate, ingest, labels, multitemporal, road_evaluate, road_labels, tiling, train
 from .runtime import Entrypoint
 
 ENTRYPOINTS: dict[str, Entrypoint] = {
@@ -11,6 +11,8 @@ ENTRYPOINTS: dict[str, Entrypoint] = {
     "segmentation-evaluate": evaluate.run,
     "multitemporal-ingest": multitemporal.run,
     "change-labels": change_labels.run,
+    "road-labels": road_labels.run,
+    "road-evaluate": road_evaluate.run,
 }
 
 __all__ = ["ENTRYPOINTS"]

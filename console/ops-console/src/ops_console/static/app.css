@@ -78,7 +78,7 @@ main { padding: 24px 32px 48px; min-width: 0; max-width: 1280px; }
 
 /* 위험 알림 */
 .alert-banner { background: var(--critical); color: var(--critical-ink); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 18px; display: flex; gap: 12px; align-items: center; font-weight: 600; }
-.alert-banner[hidden], .toast[hidden] { display: none; }
+.alert-banner[hidden], .toast[hidden], .row[hidden] { display: none; }
 .alert-banner a { color: inherit; }
 .alert-banner .dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex: none; animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }

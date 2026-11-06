@@ -9,7 +9,7 @@ Studio Agent의 HTTP 응용 프로그램 인터페이스로 작업을 요청·�
 - GET  /api/overview           상태별 건수, 위험 알림, 최근 작업
 - GET  /api/tasks/{task_id}    단계별 진행·지표·완료 기준 판정·산출물·메시지 기록
 - POST /api/tasks              작업 요청 (화면 입력 → 메시지 봉투 → Studio Agent)
-- GET  /api/assets             원본 자료 목록 (영상: 좌표 참조 체계·해상도, 라이다 점군, 합성 표본 시점 정보)
+- GET  /api/assets             원본 자료 목록 (영상: 좌표 참조 체계·해상도, 라이다 점군, 분야별 합성 표본 등록 정보)
 - GET  /api/models             학습된 모델 목록 (다른 분야 학습의 초기 가중치 선택용)
 - POST /api/assets             원본 자료 올리기
 - GET  /api/objects?uri=       저장소 객체 내려받기 (산출물 보기용)
@@ -331,7 +331,16 @@ def create_app(
                     if ls:
                         artifacts["labels"] = {
                             k: ls.get(k)
-                            for k in ("quality", "label_source", "label_sources", "compared", "change_reference_uri")
+                            for k in (
+                                "quality",
+                                "label_source",
+                                "label_sources",
+                                "compared",
+                                "change_reference_uri",
+                                "label_geometry",
+                                "reference_network_uri",
+                                "width",
+                            )
                         }
                 elif t == GAI + "AnalysisReadyData":
                     ard = await asyncio.to_thread(load, o["storage_uri"])
@@ -460,7 +469,8 @@ def create_app(
                 except Exception:  # noqa: BLE001
                     log.warning("표본 등록 정보 읽기 실패: %s", o.uri)
                     continue
-                if isinstance(meta, dict) and meta.get("acquisitions"):
+                # 분야 표본(변화탐지 시점 묶음, 도로 추출 영상·중심선): 새 작업 화면이 입력을 미리 고른다
+                if isinstance(meta, dict) and (meta.get("acquisitions") or meta.get("domain")):
                     presets.append(meta)
             elif name.endswith(VECTOR_EXT):
                 vectors.append({"uri": o.uri, "size": o.size})

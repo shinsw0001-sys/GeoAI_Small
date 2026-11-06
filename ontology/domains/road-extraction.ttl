@@ -1,15 +1,19 @@
 @prefix gai:  <https://ontology.geoai.local/core#> .
 @prefix dom:  <https://ontology.geoai.local/domain/road-extraction#> .
+@prefix job:  <https://ontology.geoai.local/jobs#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix sf:   <http://www.opengis.net/ont/sf#> .
 
-# 1년차 분야: 도로 추출
+# 1년차 분야: 도로 추출. 선형(선) 객체 분야.
+# 라벨은 도로 중심선(sf:LineString)과 폭으로 주고, 학습은 노면(폭만큼 넓힌 면)으로, 평가는 화소 지표와
+# 중심선·도로망 위상 지표(완전성·정확성·품질, APLS, 경로 연결 비율)로 한다.
 
 <https://ontology.geoai.local/domain/road-extraction>
     a owl:Ontology ;
-    owl:imports <https://ontology.geoai.local/core> ;
-    owl:versionInfo "0.1.0" .
+    owl:imports <https://ontology.geoai.local/core> , <https://ontology.geoai.local/core/execution> ;
+    owl:versionInfo "0.2.0" .
 
 dom:Domain a gai:Domain ;
     rdfs:label "도로 추출"@ko .
@@ -20,5 +24,40 @@ dom:Labels a gai:LabelScheme ;
 dom:Road a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "도로"@ko ;
-    skos:definition "차량 통행 노면. 면(다각형) 또는 중심선으로 라벨링한다."@ko ;
+    skos:definition "차량 통행 노면. 중심선(선)과 도로 폭으로 라벨링한다. 노면 다각형도 받는다. 교차로에서 중심선이 서로 이어져야 도로망이 된다."@ko ;
+    gai:labelGeometryType sf:LineString ;
     gai:dtCorrespondsTo "Road" .
+
+# 권장 완료 기준 (1년차 시작값. 실제 자료로 측정한 뒤 고친다)
+#   IoU : 노면 화소 교집합 대 합집합 비율
+#   APLS: 도로망 경로 길이 유사도(Average Path Length Similarity). 끊김·잘못된 연결을 벌점으로 준다.
+dom:Domain gai:defaultCompletionCriterion
+    [ a gai:CompletionCriterion ; gai:metric "IoU" ; gai:operator ">=" ; gai:threshold 0.5 ] ,
+    [ a gai:CompletionCriterion ; gai:metric "APLS" ; gai:operator ">=" ; gai:threshold 0.6 ] .
+
+# -----------------------------------------------------------------------------
+# 분야 전용 실행 작업 유형
+# 생성·가공(정사영상 수집·정합), 전처리(타일 분할), 학습(분할 모델)은 범용 실행 작업을 그대로 쓴다.
+# 라벨링과 성능 검증만 선형 객체에 맞춘 처리 도구로 바꾼다.
+# -----------------------------------------------------------------------------
+
+job:RoadCenterlineLabelJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "도로 중심선 라벨 생성"@ko ;
+    rdfs:comment "도로 중심선 벡터를 분석 준비 데이터 좌표 참조 체계로 바꾸고 선형 기하를 검사(빈 선·길이 0 제거, 끝점 맞춤, 교차점 분할)한 뒤, 도로 폭만큼 넓혀 타일마다 노면 마스크로 래스터화한다. 분할된 중심선을 평가용 참조 도로망으로 남긴다."@ko ;
+    gai:realizesTask gai:LabelingTask ;
+    gai:forDomain dom:Domain ;
+    gai:acceptsInputType gai:AnalysisReadyData ;
+    gai:jobOutputType gai:LabelSet ;
+    gai:toolEntrypoint "road-labels" ;
+    gai:requiresAccelerator false .
+
+job:RoadNetworkEvaluateJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "도로망 성능 검증"@ko ;
+    rdfs:comment "시험 집합 노면 화소 지표에 더해, 예측 노면을 세선화해 중심선 도로망(그래프)을 만들고 참조 도로망과 비교한다. 중심선 완전성·정확성·품질(버퍼 대응), APLS, 경로 연결 비율, 연결 요소 수를 산출하고 예측 중심선 벡터를 남긴다."@ko ;
+    gai:realizesTask gai:EvaluationTask ;
+    gai:forDomain dom:Domain ;
+    gai:jobOutputType gai:EvaluationReport ;
+    gai:toolEntrypoint "road-evaluate" ;
+    gai:requiresAccelerator true .
