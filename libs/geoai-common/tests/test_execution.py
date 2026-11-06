@@ -161,3 +161,29 @@ def test_road_extraction_domain(onto):
     )
     assert onto.acquisitions_required(RD + "Domain") == 1
     assert {c["metric"] for c in onto.default_criteria(RD + "Domain")} == {"IoU", "APLS"}
+
+
+LC = "https://ontology.geoai.local/domain/land-cover-classification#"
+
+
+def test_land_cover_domain(onto):
+    # 전면 분류 분야: 대분류 7개, 분류 코드(skos:notation) = 토지피복지도 L1_CODE
+    concepts = onto.label_concepts(LC + "Domain")
+    assert [c.value for c in concepts] == list(range(1, 8))
+    assert {c.label: c.notation for c in concepts}["시가화·건조지역"] == "100"
+    assert sorted(c.notation for c in concepts) == [f"{i}00" for i in range(1, 8)]
+    assert onto.label_geometry(LC + "Domain") == "Polygon"
+    assert onto.label_classes(LC + "Domain")[0]["notation"] == "200"
+    assert "notation" not in onto.label_classes(BLD + "Domain")[0]
+    # 라벨링·평가만 분야 전용, 나머지는 범용
+    ard = [str(GAI.AnalysisReadyData)]
+    assert onto.job_for(str(GAI.LabelingTask), ard, LC + "Domain").entrypoint == "landcover-labels"
+    ev = onto.job_for(str(GAI.EvaluationTask), [str(GAI.Model), str(GAI.LabelSet)], LC + "Domain")
+    assert (ev.entrypoint, ev.accelerator) == ("landcover-evaluate", True)
+    assert onto.job_for(str(GAI.ModelTrainingTask), ard + [str(GAI.LabelSet)], LC + "Domain").entrypoint == (
+        "segmentation-train"
+    )
+    assert {c["metric"]: c["threshold"] for c in onto.default_criteria(LC + "Domain")} == {
+        "overall_accuracy": 0.85,
+        "mIoU": 0.5,
+    }

@@ -51,6 +51,9 @@ OUTPUT_BUCKETS = [
 REQUIRED_PARAMETERS: dict[str, list[tuple[tuple[str, ...], str]]] = {
     "rasterize-labels": [(("label_source",), "참조 벡터(GeoJSON) 저장소 주소")],
     "road-labels": [(("label_source",), "도로 중심선(LineString, 폭 속성) 또는 노면 벡터(GeoJSON) 저장소 주소")],
+    "landcover-labels": [
+        (("label_source",), "토지피복 다각형(분류 코드 L1_CODE 또는 대분류 이름) GeoJSON 저장소 주소")
+    ],
     "change-labels": [
         (
             ("label_sources", "label_source"),
@@ -194,10 +197,7 @@ class SpecialistAgent(BaseAgent):
             task_type=task_type,
             project_id=envelope.project_id,
             domain=str(request.domain),
-            label_classes=[
-                {"iri": c.iri, "label": c.label, "value": c.value, "geometry": c.geometry}
-                for c in self.ontology.label_concepts(str(request.domain))
-            ],
+            label_classes=self.ontology.label_classes(str(request.domain)),
             inputs=request.inputs,
             parameters=request.parameters,
             completion_criteria=[c.model_dump() for c in request.completion_criteria],

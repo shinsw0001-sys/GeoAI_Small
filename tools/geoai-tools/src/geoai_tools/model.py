@@ -51,13 +51,26 @@ def normalize(images: np.ndarray, mean: list[float], std: list[float]) -> torch.
     return (x - m) / s
 
 
-def dice_loss(logits: torch.Tensor, target: torch.Tensor, num_classes: int) -> torch.Tensor:
-    """전경 개념들의 연성 주사위 손실(soft Dice) 평균. 전경이 작은 영상의 불균형을 보완한다."""
+def dice_loss(
+    logits: torch.Tensor, target: torch.Tensor, num_classes: int, ignore_index: int | None = None
+) -> torch.Tensor:
+    """전경 개념들의 연성 주사위 손실(soft Dice) 평균. 전경이 작은 영상의 불균형을 보완한다.
+    ignore_index 가 있으면(전면 분류의 미분류 0) 그 화소를 손실에서 뺀다."""
     prob = logits.softmax(dim=1)[:, 1:]
     onehot = nn.functional.one_hot(target, num_classes).permute(0, 3, 1, 2).float()[:, 1:]
+    if ignore_index is not None:
+        keep = (target != ignore_index).unsqueeze(1).float()
+        prob, onehot = prob * keep, onehot * keep
     inter = (prob * onehot).sum(dim=(0, 2, 3))
     total = prob.sum(dim=(0, 2, 3)) + onehot.sum(dim=(0, 2, 3))
     return 1 - ((2 * inter + 1) / (total + 1)).mean()
+
+
+def decode(logits: torch.Tensor, exhaustive: bool = False) -> torch.Tensor:
+    """화소별 개념. 전면 분류(배경 개념 없음)면 0(미분류)을 고르지 않고 1 이상 개념 중에서 고른다."""
+    if exhaustive:
+        return logits[:, 1:].argmax(1) + 1
+    return logits.argmax(1)
 
 
 def confusion(pred: np.ndarray, target: np.ndarray, valid: np.ndarray, num_classes: int) -> np.ndarray:
@@ -131,9 +144,14 @@ def transfer_weights(model: nn.Module, state: dict, rgb_groups: list[list[int]])
     return {"copied": copied, "adapted": adapted, "skipped": skipped, "total": len(own)}
 
 
-def class_weights(masks: np.ndarray, num_classes: int) -> torch.Tensor:
-    """교차 엔트로피 개념 가중치: 빈도의 제곱근 역수, 평균 1로 맞춘다. 드문 변화 유형을 보완한다."""
+def class_weights(masks: np.ndarray, num_classes: int, ignore: int | None = None) -> torch.Tensor:
+    """교차 엔트로피 개념 가중치: 빈도의 제곱근 역수, 평균 1로 맞춘다. 드문 변화 유형·피복 항목을 보완한다.
+    ignore(미분류 0)는 빈도에서 빼고 가중치 0을 준다(손실에서도 빠진다)."""
     counts = np.bincount(masks.ravel(), minlength=num_classes).astype(np.float64)
-    w = 1.0 / np.sqrt(np.maximum(counts, 1.0) / max(counts.sum(), 1.0))
-    w = w / w.mean()
+    keep = np.ones(num_classes, dtype=bool)
+    if ignore is not None:
+        keep[int(ignore)] = False
+    w = np.zeros(num_classes)
+    w[keep] = 1.0 / np.sqrt(np.maximum(counts[keep], 1.0) / max(counts[keep].sum(), 1.0))
+    w[keep] = w[keep] / w[keep].mean()
     return torch.tensor(w, dtype=torch.float32)

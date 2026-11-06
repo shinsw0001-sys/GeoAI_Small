@@ -14,6 +14,7 @@
 | 작업 하위 클래스 | 반드시 `gai:requiresInputType`, `gai:producesOutputType`, `gai:handledBy`를 선언한다. Studio Agent의 계획기가 이 세 속성으로 하위 작업을 구성한다. |
 | 권장 완료 기준 | `gai:Domain` 개체에 `gai:defaultCompletionCriterion`으로 붙인다(선택). 요청에 완료 기준이 없으면 Studio Agent가 이 값을 쓴다. 건물 추출: IoU ≥ 0.6, F1 ≥ 0.75(시작값). |
 | 라벨 기하 | 개념에 `gai:labelGeometryType`으로 `sf:Polygon`(기본), `sf:LineString`, `sf:Point`를 준다. 선이면 라벨링·평가에 선형 객체 처리를 쓰고 운영 콘솔도 도로망 화면을 보인다. |
+| 분류 코드 | 외부 분류 체계 코드가 있으면 개념에 `skos:notation`으로 준다. 처리 도구가 참조 벡터의 코드 속성을 이 값으로 대응시킨다. 예: 토지피복지도 L1_CODE. |
 | 라벨 화소값 | 라벨 체계의 최상위 개념(`skos:topConceptOf`)을 IRI 순으로 1, 2, …에 대응시킨다. 배경은 0. 처리 도구가 이 값으로 마스크를 만든다. |
 
 새 파일은 `_template.ttl`을 복사해 시작한다. 에이전트는 기동할 때 이 디렉터리의 `*.ttl`(밑줄로 시작하는 파일 제외)을 모두 읽는다. 이 디렉터리는 이미지에 들어간다. 쿠버네티스 환경에서 이미지 재빌드 없이 분야를 더할 때는 설정 맵(ConfigMap) `geoai-domains`에 넣는다(`/app/domains`로 마운트).
@@ -25,6 +26,6 @@
 | `building-extraction.ttl` | 건물 추출 | 건물 |
 | `change-detection.ttl` | 변화탐지(건물·토지) | 건물 신축·멸실·변경, 토지 변화. 분야 전용 실행 작업 2개(다시기 영상·라이다 정합, 변화 라벨 도출). 권장 완료 기준: 변화 여부 F1 ≥ 0.7, IoU ≥ 0.5 |
 | `road-extraction.ttl` | 도로 추출 | 도로(라벨 기하 `sf:LineString`: 중심선 + 폭). 분야 전용 실행 작업 2개(도로 중심선 라벨 생성, 도로망 성능 검증). 권장 완료 기준: 노면 IoU ≥ 0.5, APLS ≥ 0.6 |
-| `land-cover-classification.ttl` | 토지피복 분류 | 환경부 토지피복지도 대분류 7개 |
+| `land-cover-classification.ttl` | 토지피복 분류 | 환경부 토지피복지도 대분류 7개(`skos:notation` = 분류 코드 100~700, 전면 분류: 0 = 미분류). 분야 전용 실행 작업 2개(토지피복 라벨 생성, 토지피복 분류 성능 검증). 권장 완료 기준: 전체 정확도 ≥ 0.85, mIoU ≥ 0.5 |
 
 라벨 체계는 최상위 개념만 두었다. 세부 분류는 데이터 확보 후 `skos:narrower`로 붙인다. `../examples/` 의 파일은 시험용 예시다.

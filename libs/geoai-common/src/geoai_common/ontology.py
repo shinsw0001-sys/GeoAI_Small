@@ -53,6 +53,7 @@ class LabelConcept:
     label: str
     value: int
     geometry: str = "Polygon"  # gai:labelGeometryType 의 지역명(Polygon, LineString, Point). 없으면 면
+    notation: str | None = None  # skos:notation (외부 분류 코드, 예: 토지피복지도 L1_CODE 100)
 
     @property
     def linear(self) -> bool:
@@ -248,7 +249,26 @@ class OntologyRegistry:
             )
             geom = self.graph.value(URIRef(iri), GAI.labelGeometryType)
             geometry = str(geom).removeprefix(str(SF)) if geom is not None else "Polygon"
-            out.append(LabelConcept(iri=iri, label=label, value=idx, geometry=geometry))
+            notation = self.graph.value(URIRef(iri), SKOS.notation)
+            out.append(
+                LabelConcept(
+                    iri=iri,
+                    label=label,
+                    value=idx,
+                    geometry=geometry,
+                    notation=str(notation) if notation is not None else None,
+                )
+            )
+        return out
+
+    def label_classes(self, domain: str) -> list[dict]:
+        """실행 작업 명세·능력 명세용 라벨 개념 목록. 분류 코드(skos:notation)는 있을 때만 넣는다."""
+        out = []
+        for c in self.label_concepts(domain):
+            row = {"iri": c.iri, "label": c.label, "value": c.value, "geometry": c.geometry}
+            if c.notation is not None:
+                row["notation"] = c.notation
+            out.append(row)
         return out
 
     def label_geometry(self, domain: str) -> str:

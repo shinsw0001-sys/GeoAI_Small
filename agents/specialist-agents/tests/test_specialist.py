@@ -232,3 +232,42 @@ async def test_road_labels_and_evaluation_jobs(onto, tmp_path):
     assert (await agent.handle(e)).performative is Performative.ACCEPT
     await agent.wait_idle()
     assert runner.specs[0].entrypoint == "road-evaluate"
+
+
+LCD = "https://ontology.geoai.local/domain/land-cover-classification#Domain"
+
+
+async def test_landcover_labels_and_evaluation_jobs(onto, tmp_path):
+    _, agent, runner, objects, _ = await make(onto, tmp_path, agent_id="model-training-agent")
+    ard = {"asset_id": "a", "asset_type": str(GAI.AnalysisReadyData), "storage_uri": "s3://processed/p1/m.json"}
+    objects.put_bytes(ard["storage_uri"], b"{}")
+    e = request("LabelingTask", [ard])
+    e.payload["domain"] = LCD
+    reply = await agent.handle(e)
+    assert reply.payload["reason"] == "missing_parameter" and "토지피복" in reply.payload["detail"]
+    objects.put_bytes("s3://raw/landcover.geojson", b"{}")
+    e = request("LabelingTask", [ard], label_source="s3://raw/landcover.geojson")
+    e.payload["domain"] = LCD
+    assert (await agent.handle(e)).performative is Performative.ACCEPT
+    await agent.wait_idle()
+    spec = runner.specs[0]
+    assert spec.entrypoint == "landcover-labels"
+    # 실행 작업 명세에 분류 코드(skos:notation)가 실린다. 화소값은 IRI 순
+    assert [(c["label"], c["value"], c["notation"]) for c in spec.label_classes][:2] == [
+        ("농업지역", 1, "200"),
+        ("나지", 2, "600"),
+    ]
+    assert len(spec.label_classes) == 7
+
+    _, agent, runner, objects, _ = await make(onto, tmp_path, agent_id="analysis-evaluation-agent")
+    inputs = [
+        {"asset_id": "m", "asset_type": str(GAI.Model), "storage_uri": "s3://models/p1/model.json"},
+        {"asset_id": "l", "asset_type": str(GAI.LabelSet), "storage_uri": "s3://labels/p1/manifest.json"},
+    ]
+    for a in inputs:
+        objects.put_bytes(a["storage_uri"], b"{}")
+    e = request("EvaluationTask", inputs)
+    e.payload["domain"] = LCD
+    assert (await agent.handle(e)).performative is Performative.ACCEPT
+    await agent.wait_idle()
+    assert runner.specs[0].entrypoint == "landcover-evaluate"

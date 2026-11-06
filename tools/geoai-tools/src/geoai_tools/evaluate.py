@@ -32,7 +32,7 @@ from rasterio.features import shapes
 from shapely.geometry import mapping, shape
 
 from .data import TileSet, load_labelled
-from .model import UNet, confusion, normalize, pick_device, pixel_metrics
+from .model import UNet, confusion, decode, normalize, pick_device, pixel_metrics
 from .runtime import ToolContext, ToolError, ToolOutput
 
 GAI = "https://ontology.geoai.local/core#"
@@ -180,7 +180,7 @@ def infer_split(ctx: ToolContext) -> Inference:
     with torch.no_grad():
         for i in range(0, len(idx), 8):
             x = normalize(tiles.images[idx[i : i + 8]], norm["mean"], norm["std"]).to(device)
-            preds.append(model(x).argmax(1).cpu().numpy().astype(np.uint8))
+            preds.append(decode(model(x), labels.get("ignore_value") == 0).cpu().numpy().astype(np.uint8))
             ctx.progress(10 + 50 * min(i + 8, len(idx)) / len(idx), f"추론 {min(i + 8, len(idx))}/{len(idx)}")
     pred = np.concatenate(preds)
     pred[~tiles.valid[idx]] = 0

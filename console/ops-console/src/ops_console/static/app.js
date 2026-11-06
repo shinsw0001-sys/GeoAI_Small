@@ -18,6 +18,7 @@ const METRIC_KO = {
   APLS: "APLS (경로 길이 유사도)", connectivity: "경로 연결 비율",
   completeness: "중심선 완전성", correctness: "중심선 정확성", quality: "중심선 품질",
   reference_km: "참조 도로 길이(km)", predicted_km: "예측 도로 길이(km)",
+  overall_accuracy: "전체 정확도", kappa: "카파 계수", fwIoU: "면적 가중 IoU",
 };
 
 /* 지표 이름: 개념이 하나면 그 개념 이름을, 여럿이면 "개념 평균"을 붙인다. */
@@ -35,6 +36,11 @@ function domainSlug(iri) {
   return m ? m[1] : "default";
 }
 function rgb(c) { return `rgb(${c[0]},${c[1]},${c[2]})`; }
+/* 분류 코드(skos:notation)가 모든 개념에 있는 다개념 분야 = 전면 분류(토지피복). 입력 안내·화면을 고른다. */
+function isCoded(d) {
+  const cs = (d && d.label_concepts) || [];
+  return cs.length > 1 && cs.every((c) => c.notation);
+}
 const AGENT_KO = {
   "geo-data-production-agent": "공간정보 생성·가공 에이전트",
   "preprocessing-agent": "전처리 에이전트",
@@ -252,9 +258,13 @@ async function newTask() {
     if (proj.value === lastSlug) { lastSlug = domainSlug(d.iri); proj.value = lastSlug; }
     if (!multi) {
       const linear = d.label_geometry === "LineString";
+      const codes = [...(d.label_concepts || [])].sort((a, b) => String(a.notation).localeCompare(String(b.notation)))
+        .map((c) => `${c.notation} ${c.label}`).join(", ");
       $("#f-labels-hint").textContent = linear
         ? "도로 중심선 GeoJSON(선, 속성 width_m = 도로 폭 m). 폭만큼 넓혀 노면 마스크를 만들고, 중심선은 연결성 평가의 참조 도로망이 됩니다. 노면 다각형도 받습니다."
-        : "건물 윤곽 GeoJSON. 라벨링 단계에서 타일마다 마스크로 바꿉니다.";
+        : isCoded(d)
+          ? `토지피복 다각형 GeoJSON. 분류 코드 L1_CODE(${codes}) 또는 대분류 이름으로 항목을 맞춥니다. 중·세분류 코드는 대분류로 묶고, 다각형이 없는 곳은 미분류로 두어 학습·평가에서 뺍니다.`
+          : "건물 윤곽 GeoJSON. 라벨링 단계에서 타일마다 마스크로 바꿉니다.";
       // 분야 표본이 있으면 그 영상·벡터를, 없으면 기본 표본을 고른다
       const p = presetFor(d.iri);
       const img = p ? p.image : baseImage;
@@ -394,6 +404,47 @@ function roadLabelLine(q) {
   return `<div class="muted" style="margin-top:8px">라벨 품질: 중심선 ${q.lines}개 · ${fmt(q.centerline_km, 2)} km · 교차점 ${q.junctions} · 막다른 끝 ${q.dead_ends} · 끝점 맞춤 ${q.snapped_endpoints} · 폭 속성 ${q.width_from_attribute}/${q.lines}${q.surfaces ? ` · 노면 다각형 ${q.surfaces}개` : ""} · 노면 화소 비율 ${fmt(q.positive_pixel_ratio)}</div>`;
 }
 
+/* 토지피복 분류: 분류도 미리보기, 혼동 행렬, 항목별 정확도, 라벨 품질 */
+function landcoverPreview(rep, classes) {
+  return `<div class="card preview"><h2>분류도 미리보기</h2>
+    <div class="muted" style="margin-bottom:6px">타일마다 왼쪽 영상 · 가운데 예측 분류도 · 오른쪽 참조 분류도(회색 = 미분류)</div>
+    <img src="${objUrl(rep.preview_uri)}" alt="시험 타일 영상, 예측 토지피복 분류도, 참조 분류도를 나란히 놓은 영상">
+    <div class="legend">${classes.map((c) => `<span><i style="background:${rgb(c.color)}"></i>${esc(c.notation || "")} ${esc(c.label)}</span>`).join("")}</div></div>`;
+}
+function confusionCard(rep) {
+  const cm = rep.confusion_matrix || {};
+  const m = cm.matrix || [];
+  if (!m.length) return "";
+  const rowSum = m.map((r) => r.reduce((a, b) => a + b, 0));
+  const colSum = m[0].map((_, j) => m.reduce((a, r) => a + r[j], 0));
+  const pct = (v, t) => (t ? `${((100 * v) / t).toFixed(1)}` : "—");
+  const cell = (v, i, j) => {
+    const share = rowSum[i] ? v / rowSum[i] : 0;
+    const bg = share > 0 ? `background:color-mix(in srgb, var(--primary) ${Math.round(share * 55)}%, transparent)` : "";
+    return `<td class="num${i === j ? " diag" : ""}" style="${bg}" title="${esc(cm.labels[i])} → ${esc(cm.labels[j])}: ${v} 화소">${pct(v, rowSum[i])}</td>`;
+  };
+  return `<div class="card" style="margin-top:16px"><h2>혼동 행렬 <small class="muted">(행: 참조, 열: 예측, 참조 행 기준 %)</small></h2>
+    <div class="table-wrap"><table class="confusion"><thead><tr><th>참조 ↓ · 예측 →</th>${cm.labels.map((l, j) => `<th class="num">${esc(cm.notations[j] || "")}<br>${esc(l)}</th>`).join("")}<th class="num">생산자 정확도</th></tr></thead>
+      <tbody>${m.map((r, i) => `<tr><th>${esc(cm.notations[i] || "")} ${esc(cm.labels[i])}</th>${r.map((v, j) => cell(v, i, j)).join("")}
+        <td class="num">${pct(r[i], rowSum[i])}</td></tr>`).join("")}
+      <tr><th>사용자 정확도</th>${m.map((r, j) => `<td class="num">${pct(m[j][j], colSum[j])}</td>`).join("")}<td class="num"><strong>${fmt(rep.metrics.overall_accuracy)}</strong></td></tr></tbody></table></div>
+    <div class="muted" style="margin-top:6px">대각선이 맞게 분류한 비율입니다. 행에서 대각선 밖 값이 크면 그 항목을 놓친 것(누락 오차), 열에서 크면 다른 항목을 그 항목으로 잘못 넣은 것(포함 오차)입니다. 오른쪽 아래는 전체 정확도. 채점 화소 ${rep.scored_pixels ?? "—"}, 미분류(채점 제외) ${rep.unlabelled_pixels ?? "—"}.</div></div>`;
+}
+function landcoverClassCard(rep, classes) {
+  return `<div class="card" style="margin-top:16px"><h2>토지피복 항목별 결과</h2><div class="table-wrap"><table>
+    <thead><tr><th>항목(코드)</th><th class="num">생산자 정확도</th><th class="num">사용자 정확도</th><th class="num">IoU</th><th class="num">F1</th><th class="num">참조 면적(m²)</th><th class="num">예측 면적(m²)</th><th class="num">면적 차</th></tr></thead>
+    <tbody>${classes.map((c) => `<tr><td><i class="swatch" style="background:${rgb(c.color)}"></i>${esc(c.label)} <span class="muted mono">${esc(c.notation || "")}</span></td>
+      <td class="num">${fmt(c.producer_accuracy)}</td><td class="num">${fmt(c.user_accuracy)}</td><td class="num">${fmt(c.IoU)}</td><td class="num">${fmt(c.F1)}</td>
+      <td class="num">${fmt(c.reference_m2, 0)}</td><td class="num">${fmt(c.predicted_m2, 0)}</td>
+      <td class="num">${c.area_difference_ratio === null || c.area_difference_ratio === undefined ? "—" : `${c.area_difference_ratio > 0 ? "+" : ""}${(100 * c.area_difference_ratio).toFixed(1)}%`}</td></tr>`).join("")}</tbody></table></div>
+    <div class="muted" style="margin-top:6px">예측 토지피복 다각형(항목별로 합침, L1_CODE 속성 ${(rep.map || {}).polygons ?? "—"}개)은 단계별 결과의 landcover.geojson 으로 내려받습니다. 시험 범위에 없는 항목은 —로 둡니다.</div></div>`;
+}
+function landcoverLabelLine(q) {
+  const missing = (q.missing_classes || []).length ? ` · 범위에 없는 항목 ${q.missing_classes.map(esc).join(", ")}` : "";
+  const unmatched = (q.unmatched_values || []).length ? ` · 대응 안 된 값 ${q.unmatched_values.map(esc).join(", ")}` : "";
+  return `<div class="muted" style="margin-top:8px">라벨 품질: 다각형 ${q.features}개(코드 대응 ${q.matched_by_code}, 이름 대응 ${q.matched_by_name}) · 피복 비율 ${fmt(q.coverage)} · 기하 수정 ${q.fixed_invalid}개 · 겹침 ${fmt(q.overlap_m2, 0)} m²${unmatched}${missing}</div>`;
+}
+
 async function taskDetail(id) {
   const draw = async () => {
     const [d, o] = await Promise.all([api(`/api/tasks/${encodeURIComponent(id)}`), api("/api/overview")]);
@@ -413,7 +464,10 @@ async function taskDetail(id) {
     const inputDates = [...new Set(d.inputs.map((a) => a.acquired_at).filter(Boolean))].sort();
     const shownDates = dates.length ? dates : inputDates;
     const road = !!rep && rep.kind === "road-network-evaluation";
+    const landcover = !!rep && rep.kind === "landcover-evaluation";
+    const changeMap = multiClass && !landcover;
     const metricKeys = road ? ["IoU", "F1", "APLS", "connectivity", "completeness", "correctness", "quality"]
+      : landcover ? ["overall_accuracy", "kappa", "mIoU", "F1", "fwIoU"]
       : multiClass ? ["foreground_F1", "foreground_IoU", "IoU", "F1", "object_F1", "mIoU"] : ["IoU", "F1", "precision", "recall", "object_F1", "mIoU"];
     view.innerHTML = `
       <div class="page-head">
@@ -444,11 +498,12 @@ async function taskDetail(id) {
           ${metrics && Object.keys(metrics).length ? `<div class="metrics">${metricKeys.filter((k) => k in metrics).map((k) => `
             <div class="metric"><div class="k">${esc(metricLabel(k, dom))}</div><div class="v">${fmt(metrics[k])}</div></div>`).join("")}</div>
             ${rep && rep.objects ? `<div class="muted" style="margin-top:8px">객체: 예측 ${rep.objects.predicted} · 정답 ${rep.objects.reference} · 대응 ${rep.objects.matched} (IoU ≥ ${rep.objects.iou_threshold})</div>` : ""}
-            ${road ? `<div class="muted" style="margin-top:8px">IoU·F1은 노면 화소, 나머지는 중심선 도로망 기준입니다. APLS·경로 연결 비율이 낮으면 도로가 중간에 끊긴 것입니다.</div>` : ""}`
+            ${road ? `<div class="muted" style="margin-top:8px">IoU·F1은 노면 화소, 나머지는 중심선 도로망 기준입니다. APLS·경로 연결 비율이 낮으면 도로가 중간에 끊긴 것입니다.</div>` : ""}
+            ${landcover ? `<div class="muted" style="margin-top:8px">라벨 화소(미분류 제외) 기준입니다. mIoU·F1은 대분류 항목 평균, 면적 가중 IoU는 참조 면적 비율로 가중한 값입니다.</div>` : ""}`
           : `<div class="muted">평가 단계가 끝나면 표시됩니다.</div>`}</div>
       </div>
       ${rep || model ? `<div class="grid cols-2" style="margin-top:16px">
-        ${rep ? (road ? roadPreview(rep) : multiClass ? `<div class="card preview"><h2>변화 지도 미리보기</h2>
+        ${rep ? (road ? roadPreview(rep) : landcover ? landcoverPreview(rep, classes) : changeMap ? `<div class="card preview"><h2>변화 지도 미리보기</h2>
           ${rep.preview_layout === "pair" ? `<div class="muted" style="margin-bottom:6px">타일마다 왼쪽 ${esc((rep.acquisitions || [])[0] || "이전")} · 오른쪽 ${esc((rep.acquisitions || []).slice(-1)[0] || "이후")} + 변화</div>` : ""}
           <img src="${objUrl(rep.preview_uri)}" alt="시험 타일 위에 예측 변화(색 채움)와 정답 변화(같은 색 윤곽)를 겹친 영상">
           <div class="legend">${classes.map((c) => `<span><i style="background:${rgb(c.color)}"></i>${esc(c.label)}</span>`).join("")}<span class="muted">채움 = 예측, 윤곽 = 정답</span></div></div>`
@@ -459,7 +514,8 @@ async function taskDetail(id) {
           ${model.pretrained ? `<div class="muted">초기 가중치: ${String(model.pretrained.domain || "").includes("building-extraction") ? "건물 추출 모델" : "사전 학습 모델"} · 옮긴 층 ${model.pretrained.copied + model.pretrained.adapted}/${model.pretrained.total} (첫 층 시점별 분배 ${model.pretrained.adapted})</div>` : ""}</div>` : ""}
       </div>` : ""}
       ${road ? roadNetworkCard(rep) : ""}
-      ${multiClass ? `<div class="card" style="margin-top:16px"><h2>변화 유형별 결과</h2><div class="table-wrap"><table>
+      ${landcover ? confusionCard(rep) + landcoverClassCard(rep, classes) : ""}
+      ${changeMap ? `<div class="card" style="margin-top:16px"><h2>변화 유형별 결과</h2><div class="table-wrap"><table>
         <thead><tr><th>유형</th><th class="num">IoU</th><th class="num">F1</th><th class="num">예측 면적(m²)</th><th class="num">정답 면적(m²)</th><th class="num">객체 대응/예측/정답</th></tr></thead>
         <tbody>${classes.map((c) => `<tr><td><i class="swatch" style="background:${rgb(c.color)}"></i>${esc(c.label)}</td>
           <td class="num">${fmt(c.IoU)}</td><td class="num">${fmt(c.F1)}</td><td class="num">${fmt(c.predicted_m2, 0)}</td><td class="num">${fmt(c.reference_m2, 0)}</td>
@@ -471,7 +527,7 @@ async function taskDetail(id) {
           <td class="mono">${Object.entries(s.metrics).slice(0, 5).map(([k, v]) => `${esc(k)} ${fmt(v)}`).join(" · ") || "—"}</td>
           <td class="files">${s.outputs.map((a) => `<a href="${objUrl(a.storage_uri)}" target="_blank" rel="noopener">${shortName(a.storage_uri)}</a>`).join("") || "—"}</td></tr>`).join("")}
         </tbody></table></div>
-        ${d.artifacts.labels && d.artifacts.labels.label_geometry === "LineString" ? roadLabelLine(d.artifacts.labels.quality) : d.artifacts.labels ? `<div class="muted" style="margin-top:8px">라벨 품질: 지물 ${d.artifacts.labels.quality.features}개 · 기하 수정 ${d.artifacts.labels.quality.fixed_invalid}개 · 라벨 화소 비율 ${fmt(d.artifacts.labels.quality.positive_pixel_ratio)}${d.artifacts.labels.quality.change_polygons ? ` · 도출 변화 ${Object.entries(d.artifacts.labels.quality.change_polygons).map(([k, v]) => `${esc(conceptLabel(dom, k))} ${v}`).join(", ")}` : ""}</div>` : ""}
+        ${d.artifacts.labels && d.artifacts.labels.label_geometry === "LineString" ? roadLabelLine(d.artifacts.labels.quality) : d.artifacts.labels && d.artifacts.labels.coverage === "exhaustive" ? landcoverLabelLine(d.artifacts.labels.quality) : d.artifacts.labels ? `<div class="muted" style="margin-top:8px">라벨 품질: 지물 ${d.artifacts.labels.quality.features}개 · 기하 수정 ${d.artifacts.labels.quality.fixed_invalid}개 · 라벨 화소 비율 ${fmt(d.artifacts.labels.quality.positive_pixel_ratio)}${d.artifacts.labels.quality.change_polygons ? ` · 도출 변화 ${Object.entries(d.artifacts.labels.quality.change_polygons).map(([k, v]) => `${esc(conceptLabel(dom, k))} ${v}`).join(", ")}` : ""}</div>` : ""}
         ${d.artifacts.ard ? `<div class="muted">타일 ${d.artifacts.ard.tile_size}px · 학습 ${d.artifacts.ard.split_counts.train} / 검증 ${d.artifacts.ard.split_counts.val} / 시험 ${d.artifacts.ard.split_counts.test}</div>` : ""}
       </div>
       <div class="card" style="margin-top:16px"><details><summary>메시지 기록 ${d.timeline.length}건</summary>
@@ -494,7 +550,7 @@ async function dataView() {
     <div class="card"><h2>자료 올리기</h2>
       <form id="up-form" class="inline"><input type="file" id="up-file" accept=".tif,.tiff,.geojson,.json,.las" required>
       <button class="primary" type="submit">올리기</button></form>
-      <div class="hint muted" style="margin-top:6px">GeoTIFF(좌표 참조 체계 포함, 3밴드 이상), 라이다 LAS, 건물 윤곽·토지피복·도로 중심선 GeoJSON. 다시기 분야는 새 작업 화면에서 시점별 취득 일자를 지정합니다.</div></div>
+      <div class="hint muted" style="margin-top:6px">GeoTIFF(좌표 참조 체계 포함, 3밴드 이상), 라이다 LAS, 건물 윤곽·토지피복(분류 코드 L1_CODE)·도로 중심선 GeoJSON. 다시기 분야는 새 작업 화면에서 시점별 취득 일자를 지정합니다.</div></div>
     <div class="card"><h2>영상 ${assets.images.length}건</h2>
       ${assets.images.length ? `<div class="table-wrap"><table><thead><tr><th>주소</th><th>좌표 참조 체계</th><th class="num">해상도(m)</th><th class="num">크기</th></tr></thead><tbody>
       ${assets.images.map((a) => `<tr><td class="mono">${esc(a.uri)}</td><td>${a.error ? `<span class="verdict-bad">${esc(a.error)}</span>` : esc(a.crs)}</td>

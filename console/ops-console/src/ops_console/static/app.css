@@ -226,3 +226,5 @@ fieldset.acq select, fieldset.acq input { width: 100%; }
 /* 변화 유형 색 견본. 유형 색은 처리 도구가 정한 차분한 색이며 빨간 계열을 쓰지 않는다. */
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 .legend { flex-wrap: wrap; }
+table.confusion td.diag { font-weight: 600; outline: 1px solid var(--primary); outline-offset: -1px; }
+table.confusion th { font-weight: 600; }

@@ -7,6 +7,8 @@
 산출: 모델(gai:Model) = model.json(구조·정규화·학습 이력) + model.pt(가중치)
       입력 밴드 수는 분석 준비 데이터에서 읽는다(단시기 RGB 3밴드, 다시기 RGB×시점 + 지물 높이×시점).
       개념이 셋 이상(배경 포함)이면 교차 엔트로피에 빈도 기반 개념 가중치를 준다(class_weighting=auto).
+      라벨 세트에 ignore_value(전면 분류의 미분류 0)가 있으면 그 화소를 손실·검증 지표에서 빼고,
+      예측은 0을 제외한 개념 중에서 고른다.
 매개변수: epochs(20), batch_size(8), learning_rate(0.001), base_channels(16), seed(42),
           pretrained_uri(선택: 같은 구조 가중치 .pt 또는 다른 분야 모델 명세 model.json. 모양이 다르면 전이),
           class_weighting(auto | none | inverse_sqrt)
@@ -24,7 +26,17 @@ from geoai_common.objectstore import get_json, put_json
 from torch import nn
 
 from .data import load_labelled
-from .model import UNet, class_weights, confusion, dice_loss, normalize, pick_device, pixel_metrics, transfer_weights
+from .model import (
+    UNet,
+    class_weights,
+    confusion,
+    decode,
+    dice_loss,
+    normalize,
+    pick_device,
+    pixel_metrics,
+    transfer_weights,
+)
 from .runtime import ToolContext, ToolError, ToolOutput
 
 GAI = "https://ontology.geoai.local/core#"
@@ -38,12 +50,16 @@ def augment(x: torch.Tensor, y: torch.Tensor, gen: torch.Generator) -> tuple[tor
     return x, y
 
 
-def evaluate_split(model: nn.Module, x: torch.Tensor, y: np.ndarray, valid: np.ndarray, n_cls: int, device) -> dict:
+def evaluate_split(
+    model: nn.Module, x: torch.Tensor, y: np.ndarray, valid: np.ndarray, n_cls: int, device, ignore: int | None = None
+) -> dict:
     model.eval()
     preds = []
     with torch.no_grad():
         for i in range(0, len(x), 8):
-            preds.append(model(x[i : i + 8].to(device)).argmax(1).cpu().numpy())
+            preds.append(decode(model(x[i : i + 8].to(device)), ignore == 0).cpu().numpy())
+    if ignore is not None:
+        valid = valid & (y != ignore)
     return pixel_metrics(confusion(np.concatenate(preds), y, valid, n_cls))
 
 
@@ -60,6 +76,8 @@ def run(ctx: ToolContext) -> ToolOutput:
     ctx.progress(2, "라벨 세트·타일 읽기")
     labels, tiles = load_labelled(ctx.store, labels_asset.storage_uri)
     n_cls = len(labels["classes"])
+    # 전면 분류 라벨 세트(토지피복)는 0 = 미분류. 손실·검증 지표에서 뺀다.
+    ignore = labels.get("ignore_value")
     norm = tiles.manifest["normalization"]
     train_idx, val_idx = tiles.split("train"), tiles.split("val")
     if len(train_idx) == 0 or len(val_idx) == 0:
@@ -104,8 +122,10 @@ def run(ctx: ToolContext) -> ToolOutput:
     weighting = str(ctx.spec.parameters.get("class_weighting", "auto"))
     weights = None
     if weighting == "inverse_sqrt" or (weighting == "auto" and n_cls > 2):
-        weights = class_weights(tiles.masks[train_idx], n_cls)
-    ce = nn.CrossEntropyLoss(weight=weights.to(device) if weights is not None else None)
+        weights = class_weights(tiles.masks[train_idx], n_cls, ignore)
+    ce = nn.CrossEntropyLoss(
+        weight=weights.to(device) if weights is not None else None, ignore_index=-100 if ignore is None else int(ignore)
+    )
 
     history, best, best_state, best_epoch = [], -1.0, None, 0
     started = time.monotonic()
@@ -118,13 +138,13 @@ def run(ctx: ToolContext) -> ToolOutput:
             xb, yb = augment(x_train[sel], y_train[sel], gen)
             xb, yb = xb.to(device), yb.to(device)
             logits = model(xb)
-            loss = ce(logits, yb) + dice_loss(logits, yb, n_cls)
+            loss = ce(logits, yb) + dice_loss(logits, yb, n_cls, ignore)
             opt.zero_grad()
             loss.backward()
             opt.step()
             sched.step()
             losses.append(float(loss.detach()))
-        val = evaluate_split(model, x_val, tiles.masks[val_idx], tiles.valid[val_idx], n_cls, device)
+        val = evaluate_split(model, x_val, tiles.masks[val_idx], tiles.valid[val_idx], n_cls, device, ignore)
         history.append({"epoch": epoch, "loss": round(float(np.mean(losses)), 5), "val_IoU": round(val["IoU"], 5)})
         if val["IoU"] > best:
             best, best_epoch = val["IoU"], epoch
@@ -149,6 +169,7 @@ def run(ctx: ToolContext) -> ToolOutput:
         "class_weights": weights.round(decimals=4).tolist() if weights is not None else None,
         "parameters": int(sum(p.numel() for p in model.parameters())),
         "classes": labels["classes"],
+        "ignore_value": ignore,
         "normalization": norm,
         "tile_size": tiles.manifest["tile_size"],
         "crs": tiles.manifest["crs"],
