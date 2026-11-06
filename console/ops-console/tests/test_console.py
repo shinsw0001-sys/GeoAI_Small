@@ -180,3 +180,18 @@ def test_road_domain_catalog_and_preset(client):
     assert [p["domain"] for p in presets] == [RD]
     js = client.get("/static/app.js").text
     assert "road-network-evaluation" in js and "도로망 위상 평가" in js
+
+
+LC = "https://ontology.geoai.local/domain/land-cover-classification#Domain"
+
+
+def test_landcover_domain_catalog(client):
+    cat = client.get("/api/catalog").json()
+    lc = next(d for d in cat["domains"] if d["iri"] == LC)
+    # 화면은 개념의 분류 코드(skos:notation)로 토지피복 입력 안내를 고른다
+    assert sorted(c["notation"] for c in lc["label_concepts"]) == ["100", "200", "300", "400", "500", "600", "700"]
+    assert lc["label_geometry"] == "Polygon"
+    assert {c["metric"] for c in lc["default_criteria"]} == {"overall_accuracy", "mIoU"}
+    assert all("notation" not in c for c in next(d for d in cat["domains"] if d["iri"] == BUILDING)["label_concepts"])
+    js = client.get("/static/app.js").text
+    assert "landcover-evaluation" in js and "혼동 행렬" in js and "L1_CODE" in js

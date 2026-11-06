@@ -340,6 +340,7 @@ def create_app(
                                 "label_geometry",
                                 "reference_network_uri",
                                 "width",
+                                "coverage",
                             )
                         }
                 elif t == GAI + "AnalysisReadyData":

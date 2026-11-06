@@ -1,15 +1,18 @@
 @prefix gai:  <https://ontology.geoai.local/core#> .
 @prefix dom:  <https://ontology.geoai.local/domain/land-cover-classification#> .
+@prefix job:  <https://ontology.geoai.local/jobs#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 
-# 1년차 분야: 토지피복 분류
+# 1년차 분야: 토지피복 분류. 전면 분류(wall-to-wall) 분야.
+# 모든 화소가 대분류 7개 중 하나에 속한다. 배경 개념이 없으므로 라벨 마스크의 0은 "미분류(라벨 없음)"이고
+# 학습 손실과 평가에서 뺀다. 평가는 혼동 행렬 기반 전체 정확도·카파·개념별 생산자·사용자 정확도로 한다.
 
 <https://ontology.geoai.local/domain/land-cover-classification>
     a owl:Ontology ;
-    owl:imports <https://ontology.geoai.local/core> ;
-    owl:versionInfo "0.1.0" .
+    owl:imports <https://ontology.geoai.local/core> , <https://ontology.geoai.local/core/execution> ;
+    owl:versionInfo "0.2.0" .
 
 dom:Domain a gai:Domain ;
     rdfs:label "토지피복 분류"@ko .
@@ -17,39 +20,88 @@ dom:Domain a gai:Domain ;
 dom:Labels a gai:LabelScheme ;
     rdfs:label "토지피복 분류 라벨 체계(대분류)"@ko .
 
-# 환경부 토지피복지도 대분류 7개 항목을 따른다. 중·세분류는 분야 확정 후 skos:narrower 로 붙인다.
+# 환경부 토지피복지도 대분류 7개 항목을 따른다. skos:notation 은 토지피복지도 분류 코드(L1_CODE)다.
+# 중분류(110, 120 ...)·세분류 코드는 첫 자리로 대분류에 대응시킨다. 중·세분류 개념은 자료 확보 후 skos:narrower 로 붙인다.
 
 dom:UrbanArea a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "시가화·건조지역"@ko ;
+    skos:notation "100" ;
+    skos:definition "주거·공업·상업·문화체육휴양·교통·공공시설 지역."@ko ;
     gai:dtCorrespondsTo "LandCover" .
 
 dom:Agriculture a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "농업지역"@ko ;
+    skos:notation "200" ;
+    skos:definition "논, 밭, 시설재배지, 과수원, 기타 재배지."@ko ;
     gai:dtCorrespondsTo "LandCover" .
 
 dom:Forest a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "산림지역"@ko ;
+    skos:notation "300" ;
+    skos:definition "활엽수림, 침엽수림, 혼효림."@ko ;
     gai:dtCorrespondsTo "LandCover" .
 
 dom:Grassland a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "초지"@ko ;
+    skos:notation "400" ;
+    skos:definition "자연 초지, 인공 초지(골프장·공원 잔디 등)."@ko ;
     gai:dtCorrespondsTo "LandCover" .
 
 dom:Wetland a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "습지"@ko ;
+    skos:notation "500" ;
+    skos:definition "내륙 습지, 연안 습지."@ko ;
     gai:dtCorrespondsTo "LandCover" .
 
 dom:Barren a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "나지"@ko ;
+    skos:notation "600" ;
+    skos:definition "자연 나지, 인공 나지(채광지·운동장 등)."@ko ;
     gai:dtCorrespondsTo "LandCover" .
 
 dom:Water a skos:Concept ;
     skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
     skos:prefLabel "수역"@ko ;
+    skos:notation "700" ;
+    skos:definition "내륙수(하천·호소), 해양수."@ko ;
     gai:dtCorrespondsTo "LandCover" .
+
+# 권장 완료 기준 (1년차 시작값. 실제 자료로 측정한 뒤 고친다)
+#   overall_accuracy: 전체 정확도(라벨 화소 중 맞게 분류한 비율). 85 % 는 토지피복 분류의 관행적 기준이다.
+#   mIoU            : 대분류별 IoU 평균. 면적이 작은 항목(습지·나지)의 성능을 전체 정확도가 가리지 않게 한다.
+dom:Domain gai:defaultCompletionCriterion
+    [ a gai:CompletionCriterion ; gai:metric "overall_accuracy" ; gai:operator ">=" ; gai:threshold 0.85 ] ,
+    [ a gai:CompletionCriterion ; gai:metric "mIoU" ; gai:operator ">=" ; gai:threshold 0.5 ] .
+
+# -----------------------------------------------------------------------------
+# 분야 전용 실행 작업 유형
+# 생성·가공(정사영상 수집·정합), 전처리(타일 분할), 학습(분할 모델)은 범용 실행 작업을 그대로 쓴다.
+# 라벨링과 성능 검증만 전면 분류에 맞춘 처리 도구로 바꾼다.
+# -----------------------------------------------------------------------------
+
+job:LandCoverLabelJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "토지피복 라벨 생성"@ko ;
+    rdfs:comment "토지피복 다각형을 분석 준비 데이터 좌표 참조 체계로 바꾸고 기하 오류를 고친 뒤, 분류 코드(skos:notation) 또는 항목 이름으로 대분류 개념에 대응시켜 타일마다 분류 마스크로 래스터화한다. 다각형이 없는 화소는 미분류(0)로 두고 학습·평가에서 뺀다. 피복 비율·항목별 면적·겹침을 검사한다."@ko ;
+    gai:realizesTask gai:LabelingTask ;
+    gai:forDomain dom:Domain ;
+    gai:acceptsInputType gai:AnalysisReadyData ;
+    gai:jobOutputType gai:LabelSet ;
+    gai:toolEntrypoint "landcover-labels" ;
+    gai:requiresAccelerator false .
+
+job:LandCoverEvaluateJob a owl:Class ;
+    rdfs:subClassOf gai:Job ;
+    rdfs:label "토지피복 분류 성능 검증"@ko ;
+    rdfs:comment "시험 집합의 라벨 화소로 혼동 행렬을 만들어 전체 정확도, 카파 계수, 대분류별 생산자·사용자 정확도·IoU·F1, mIoU, 항목별 면적을 산출한다. 예측 분류도를 항목별로 합친 토지피복 다각형과 분류도 미리보기를 남긴다."@ko ;
+    gai:realizesTask gai:EvaluationTask ;
+    gai:forDomain dom:Domain ;
+    gai:jobOutputType gai:EvaluationReport ;
+    gai:toolEntrypoint "landcover-evaluate" ;
+    gai:requiresAccelerator true .
