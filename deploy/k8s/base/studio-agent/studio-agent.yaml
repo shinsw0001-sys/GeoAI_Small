@@ -1,5 +1,6 @@
 # Studio Agent: 상태를 두지 않는 서비스. 상태는 프로젝트 상태 저장소에만 두므로 수평 확장할 수 있다.
-# 분야 온톨로지는 설정 맵 geoai-domains 를 /app/domains 에 붙여 주입한다(이미지 재빌드 불필요).
+# 1년차 분야 온톨로지는 이미지(/app/ontology/domains)에 들어 있다. 추가 분야는 설정 맵 geoai-domains 를
+# /app/domains 에 붙여 주입한다(이미지 재빌드 불필요).
 # 비밀(Secret) geoai-studio-agent 는 오버레이가 만든다 (키: database-url, 선택 llm-api-key).
 apiVersion: v1
 kind: ServiceAccount

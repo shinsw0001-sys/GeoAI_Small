@@ -8,7 +8,7 @@
 |---|---|---|
 | 온톨로지 | 모든 에이전트가 참조하는 공유 어휘. 에이전트·작업·데이터 자산·분야·완료 기준을 클래스로 정의한다. | `ontology/core/geoai-core.ttl` |
 | 형상 제약 | 작업 요청이 갖춰야 할 조건(분야 1개, 입력 1개 이상, 좌표 참조 체계 형식 등). | `ontology/core/geoai-core-shapes.ttl` |
-| 분야 온톨로지 | 분야별 확장 어휘. 1년차 4개, 최종 20개. 핵심 온톨로지를 고치지 않고 파일을 추가한다. | `ontology/domains/` |
+| 분야 온톨로지 | 분야별 확장 어휘. 1년차 4개(건물 추출, 변화탐지, 도로 추출, 토지피복 분류), 최종 20개. 핵심 온톨로지를 고치지 않고 파일을 추가한다. 토지피복 라벨은 환경부 토지피복지도 대분류 [10]를 따른다. | `ontology/domains/` |
 | 메시지 규약 | 봉투(추적 식별자, 수행 의도, 송수신자) + 수행 의도별 본문. | `libs/geoai-common/.../messages.py`, `schemas/` |
 | 에이전트 | 판단·조율만 한다. 실제 계산은 작업 실행 엔진이 수행한다. 상태를 두지 않는다. | `agents/` |
 | 프로젝트 상태 저장소 | 작업 상태·메시지 기록. 상태 전이는 비교 후 교환(compare-and-set)으로만 한다. | PostgreSQL + PostGIS |
@@ -194,3 +194,5 @@ kubectl -n geoai-data create secret generic geoai-object-store --from-file=s3.js
 [8] SeaweedFS, "SeaweedFS: a fast distributed storage system for blobs, objects, files, and data lake," GitHub repository. [Online]. Available: https://github.com/seaweedfs/seaweedfs
 
 [9] Argo Project, "Argo Workflows: Kubernetes-native workflow engine," Cloud Native Computing Foundation. [Online]. Available: https://argoproj.github.io/workflows/
+
+[10] 환경부, "토지피복지도 분류체계," 환경공간정보서비스. [Online]. Available: https://egis.me.go.kr

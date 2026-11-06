@@ -1,0 +1,41 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix dom:  <https://ontology.geoai.local/domain/change-detection#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# 1년차 분야: 변화탐지(건물·토지)
+
+<https://ontology.geoai.local/domain/change-detection>
+    a owl:Ontology ;
+    owl:imports <https://ontology.geoai.local/core> ;
+    owl:versionInfo "0.1.0" .
+
+dom:Domain a gai:Domain ;
+    rdfs:label "변화탐지(건물·토지)"@ko .
+
+dom:Labels a gai:LabelScheme ;
+    rdfs:label "변화탐지 라벨 체계"@ko .
+
+# 두 시점 영상 사이의 변화 유형. 대상은 건물과 토지다.
+dom:NewBuilding a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "건물 신축"@ko ;
+    gai:dtCorrespondsTo "Building" .
+
+dom:DemolishedBuilding a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "건물 멸실"@ko ;
+    gai:dtCorrespondsTo "Building" .
+
+dom:ModifiedBuilding a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "건물 변경"@ko ;
+    skos:definition "증축·개축 등으로 윤곽이 바뀐 건물."@ko ;
+    gai:dtCorrespondsTo "Building" .
+
+dom:LandChange a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "토지 변화"@ko ;
+    skos:definition "토지피복 유형이 두 시점 사이에 바뀐 구역."@ko ;
+    gai:dtCorrespondsTo "LandParcel" .

@@ -32,7 +32,13 @@ def request(**overrides):
 
 def test_version_and_domains(onto):
     assert onto.version == "0.1.0"
-    assert onto.domains() == [EX + "Domain"]
+    year1 = [
+        f"https://ontology.geoai.local/domain/{d}#Domain"
+        for d in ("building-extraction", "change-detection", "land-cover-classification", "road-extraction")
+    ]
+    assert onto.domains() == sorted([*year1, EX + "Domain"])
+    for d in year1:
+        assert onto.validate_request(str(GAI.ModelTrainingTask), request(domain=d)) == []
 
 
 def test_template_is_not_loaded(onto):

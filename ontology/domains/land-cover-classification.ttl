@@ -1,0 +1,55 @@
+@prefix gai:  <https://ontology.geoai.local/core#> .
+@prefix dom:  <https://ontology.geoai.local/domain/land-cover-classification#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# 1년차 분야: 토지피복 분류
+
+<https://ontology.geoai.local/domain/land-cover-classification>
+    a owl:Ontology ;
+    owl:imports <https://ontology.geoai.local/core> ;
+    owl:versionInfo "0.1.0" .
+
+dom:Domain a gai:Domain ;
+    rdfs:label "토지피복 분류"@ko .
+
+dom:Labels a gai:LabelScheme ;
+    rdfs:label "토지피복 분류 라벨 체계(대분류)"@ko .
+
+# 환경부 토지피복지도 대분류 7개 항목을 따른다. 중·세분류는 분야 확정 후 skos:narrower 로 붙인다.
+
+dom:UrbanArea a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "시가화·건조지역"@ko ;
+    gai:dtCorrespondsTo "LandCover" .
+
+dom:Agriculture a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "농업지역"@ko ;
+    gai:dtCorrespondsTo "LandCover" .
+
+dom:Forest a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "산림지역"@ko ;
+    gai:dtCorrespondsTo "LandCover" .
+
+dom:Grassland a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "초지"@ko ;
+    gai:dtCorrespondsTo "LandCover" .
+
+dom:Wetland a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "습지"@ko ;
+    gai:dtCorrespondsTo "LandCover" .
+
+dom:Barren a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "나지"@ko ;
+    gai:dtCorrespondsTo "LandCover" .
+
+dom:Water a skos:Concept ;
+    skos:inScheme dom:Labels ; skos:topConceptOf dom:Labels ;
+    skos:prefLabel "수역"@ko ;
+    gai:dtCorrespondsTo "LandCover" .
